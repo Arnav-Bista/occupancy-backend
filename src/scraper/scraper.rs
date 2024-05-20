@@ -7,7 +7,7 @@ use tokio::time::{sleep_until, Duration, Instant};
 
 use std::sync::Arc;
 
-use crate::timing::{schedule::Schedule, uk_datetime_now::uk_datetime_now};
+use crate::{scraper::sta::main_library::MainLibrary, timing::{schedule::Schedule, uk_datetime_now::uk_datetime_now}};
 
 use super::sta::gym::Gym;
 
@@ -26,12 +26,12 @@ impl Scraper {
     pub async fn run(self) {
         println!("Running!");
         let gym = Gym::new();
-        tokio::spawn(async move {
-            self.run_scraper(gym).await;
-        });
+        let library = MainLibrary::new();
+        // tokio::spawn(Self::run_scraper(self.connection_pool.clone(), gym));
+        tokio::spawn(Self::run_scraper(self.connection_pool.clone(), library));
     }
 
-    async fn run_scraper<T: Scrape<T>>(&self, target: T) {
+    async fn run_scraper<T: Scrape<T>>(connection_pool: Arc<Pool<SqliteConnectionManager>>, target: T) {
         loop {
             let (occupancy, schedule, timestamp) = match target.scrape(target.get_request()).await {
                 Err(err) => {
@@ -47,18 +47,18 @@ impl Scraper {
             }
 
             if schedule.unwrap().is_open(timestamp) {
-                self.write_to_database(occupancy.unwrap(), timestamp, &T::table_name());
+                Self::write_to_database(&connection_pool, occupancy.unwrap(), timestamp, &T::table_name());
             }
             Self::standard_sleep().await;
         }
     }
 
     async fn standard_sleep() {
-        sleep_until(Instant::now() + Duration::from_secs(60 * 10)).await;
+        sleep_until(Instant::now() + Duration::from_secs(30 * 10)).await;
     }
 
-    fn write_to_database(&self, occupancy: u16, timestamp: DateTime<Tz>, name: &str) {
-        let connection = match self.connection_pool.get() {
+    fn write_to_database(connection_pool: &Arc<Pool<SqliteConnectionManager>>, occupancy: u16, timestamp: DateTime<Tz>, name: &str) {
+        let connection = match connection_pool.get() {
             Ok(conn) => conn,
             Err(_) => {
                 println!("Could not get database connection");

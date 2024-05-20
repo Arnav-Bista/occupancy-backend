@@ -2,22 +2,23 @@ use regex::Regex;
 use reqwest::Client;
 use reqwest::{Method, RequestBuilder};
 
-use crate::{scraper::scraper::Scrape, timing::{daily::Daily, schedule::Schedule}};
+use crate::{
+    scraper::scraper::Scrape,
+    timing::{daily::Daily, schedule::Schedule},
+};
 
 pub struct Gym {
     url: String,
     user_agent: String,
     client: Client,
-    // Man I love regex 
+    // Man I love regex
     occupancy_regex: Regex,
     schedule_regex: Regex,
     schedule_entry_regex: Regex,
     schedule_time_regex: Regex,
-
 }
 
 impl Gym {
-    
     pub fn new() -> Self {
         Self {
             url: "https://sport.wp.st-andrews.ac.uk/".to_string(),
@@ -25,12 +26,12 @@ impl Gym {
             client: Client::new(),
             // 🗿
             occupancy_regex: Regex::new(r"Occupancy:\s+(\d+)%").unwrap(),
-            schedule_regex: Regex::new("<dd class=\"paired-values-list__value\">(.*?)</dd>").unwrap(),
+            schedule_regex: Regex::new("<dd class=\"paired-values-list__value\">(.*?)</dd>")
+                .unwrap(),
             schedule_entry_regex: Regex::new(r"(.*)\sto\s(.*)|CLOSED").unwrap(),
-            schedule_time_regex: Regex::new(r"(\d+).(\d+)(.*)").unwrap()
+            schedule_time_regex: Regex::new(r"(\d+).(\d+)(.*)").unwrap(),
         }
     }
-
 
     fn parse_timings(&self, string: &str) -> u16 {
         // HHMM - 24 Hour Format
@@ -39,17 +40,16 @@ impl Gym {
         let hour: u16 = regex_match.get(1).unwrap().as_str().parse().unwrap();
         let minute: u16 = regex_match.get(2).unwrap().as_str().parse().unwrap();
         let ampm = regex_match.get(3).unwrap().as_str().to_lowercase();
-        
+
         match ampm.as_str() {
             "am" => hour * 100 + minute,
             "pm" => (hour + 12) * 100 + minute,
-            _ => 0
+            _ => 0,
         }
     }
 }
 
 impl Scrape<Gym> for Gym {
-    
     fn table_name() -> String {
         "gym".to_string()
     }
@@ -76,10 +76,12 @@ impl Scrape<Gym> for Gym {
     fn parse_schedule(&self, body: &str) -> Option<Schedule> {
         // Captures the tags encompassing the Schedule
         let mut schedules = self.schedule_regex.captures_iter(body);
-        let mut  schedule = Schedule::new();
-         while let Some(inner_html) = schedules.next() {
+        let mut schedule = Schedule::new();
+        while let Some(inner_html) = schedules.next() {
             // Capture each row
-            let timings = self.schedule_entry_regex.captures(inner_html.get(1)?.as_str())?;
+            let timings = self
+                .schedule_entry_regex
+                .captures(inner_html.get(1)?.as_str())?;
             // Captures the Numbers
             // Opening
             let timings_match: &str = timings.get(1)?.as_str();
@@ -90,12 +92,10 @@ impl Scrape<Gym> for Gym {
             let opening = timings_match;
             // Closing
             let closing = timings.get(2)?.as_str();
-            let _ = schedule.add_timing(
-                Daily::new_open(
-                    self.parse_timings(opening),
-                    self.parse_timings(closing)
-                )
-            );
+            let _ = schedule.add_timing(Daily::new_open(
+                self.parse_timings(opening),
+                self.parse_timings(closing),
+            ));
         }
         Some(schedule)
     }
