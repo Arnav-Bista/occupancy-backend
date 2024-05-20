@@ -27,7 +27,7 @@ impl Scraper {
         println!("Running!");
         let gym = Gym::new();
         let library = MainLibrary::new();
-        // tokio::spawn(Self::run_scraper(self.connection_pool.clone(), gym));
+        tokio::spawn(Self::run_scraper(self.connection_pool.clone(), gym));
         tokio::spawn(Self::run_scraper(self.connection_pool.clone(), library));
     }
 
