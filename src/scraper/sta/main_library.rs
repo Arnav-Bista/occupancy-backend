@@ -101,8 +101,11 @@ impl Scrape<MainLibrary> for MainLibrary {
     }
 
     fn parse_occupancy(&self, body: &str) -> Option<u16> {
-        let response: APIResponse = serde_json::from_str(body).unwrap();
-        dbg!(&response);
+        let response: APIResponse = match serde_json::from_str(body) {
+            Err(_) => return None,
+            Ok(data) => data
+        };
+        // dbg!(&response);
         Some(((response.total * 100) / response.capacity) as u16)
     }
 
