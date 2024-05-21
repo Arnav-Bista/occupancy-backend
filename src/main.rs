@@ -2,19 +2,17 @@ mod scraper;
 mod server;
 mod timing;
 
-use std::{error::Error, path::Path, sync::Arc};
+use std::sync::Arc;
 
-use r2d2::Pool;
+use hyper::server::conn::http1;
+use hyper_util::rt::TokioIo;
 use r2d2_sqlite::SqliteConnectionManager;
 use scraper::scraper::Scraper;
 use server::server::Server;
-use tokio::net::{TcpListener, TcpStream};
-
-
+use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
-    
     let manager = SqliteConnectionManager::file("data.db");
     let pool = r2d2::Pool::builder().build(manager).unwrap();
     let pool = Arc::new(pool);
@@ -29,13 +27,16 @@ async fn main() {
     let listener = TcpListener::bind("127.0.0.1:7878").await.unwrap();
 
     loop {
-        let (socket, address) = listener.accept().await.unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        let io = TokioIo::new(stream);
+        let server_clone = server.clone();
         tokio::spawn(async move {
-            process(socket).await;
+            if let Err(err) = http1::Builder::new()
+                .serve_connection(io, server_clone)
+                .await
+            {
+                println!("{}", err);
+            }
         });
     }
-}
-
-async fn process(socket: TcpStream) {
-
 }
