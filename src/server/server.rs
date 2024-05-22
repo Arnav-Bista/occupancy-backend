@@ -169,7 +169,7 @@ impl Server {
             Some(captures) => captures,
         };
         let name = name.get(0).unwrap().as_str();
-        if name == "" {
+        if name.is_empty() {
             return Self::bad_request("Malformed Name");
         }
 
@@ -212,7 +212,7 @@ impl Server {
     fn not_found(message: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let res = Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(Full::new(if message == "" {
+            .body(Full::new(if message.is_empty() {
                 Bytes::new()
             } else {
                 Bytes::from(format!("{{\"error\": \"{}\" }}", message))
