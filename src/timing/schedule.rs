@@ -1,15 +1,16 @@
 use chrono::{DateTime, Datelike, Timelike, Weekday};
 use chrono_tz::Tz;
 
+use serde::Serialize;
 use tokio::time::{Instant, Duration};
 use super::daily::Daily;
 
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Schedule {
     timings: [Daily; 7],
     count: usize,
-    standard_interval_min: u16
+    // standard_interval_min: u16
 }
 
 
@@ -18,7 +19,7 @@ impl Schedule {
         Self {
             timings: [Daily::new_closed(); 7],
             count: 0,
-            standard_interval_min: 5
+            // standard_interval_min: 5
         }
     }
 

@@ -1,5 +1,7 @@
+use serde::Serialize;
 
-#[derive(Copy, Clone, Debug)]
+
+#[derive(Copy, Clone, Debug, Serialize)]
 pub struct Daily {
     opening: Option<u16>,
     closing: Option<u16>,

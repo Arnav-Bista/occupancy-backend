@@ -1,23 +1,31 @@
 use bytes::Bytes;
-use chrono::{Date, DateTime, NaiveDate};
-use chrono_tz::Tz;
+use chrono::NaiveDate;
 use http_body_util::Full;
-use hyper::{
-    body::{Body, Incoming},
-    service::Service,
-    Method, Request, Response, StatusCode, Uri,
-};
+use hyper::{body::Incoming, service::Service, Method, Request, Response, StatusCode};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use regex::Regex;
-use rusqlite::{Connection, Statement};
 use serde::Serialize;
 
-use std::{collections::HashMap, error::Error, future::Future, pin::Pin, str::FromStr, sync::Arc};
+use std::{collections::HashMap, future::Future, pin::Pin, str::FromStr, sync::Arc};
+
+use crate::timing::schedule::{self, Schedule};
 
 #[derive(Clone)]
 pub struct Server {
     connection_pool: Arc<Pool<SqliteConnectionManager>>,
+}
+
+#[derive(Serialize)]
+struct MyResponse {
+    data: Vec<(String, u16)>,
+    schedule: String,
+}
+
+impl MyResponse {
+    pub fn new(data: Vec<(String, u16)>, schedule: String) -> Self {
+        Self { data, schedule }
+    }
 }
 
 impl Server {
@@ -51,12 +59,37 @@ impl Server {
         name: &str,
     ) -> rusqlite::Result<Option<String>> {
         // Name should already be sanitized!
-        let mut statement = connection.prepare(&format!("SELECT time FROM {} ORDER BY id DESC LIMIT 1", name))?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT time FROM {} ORDER BY id DESC LIMIT 1",
+            name
+        ))?;
         let mut data = statement.query(())?;
         match data.next()? {
             Some(data) => {
                 let data: String = data.get(0)?;
                 Ok(Some(data.split_whitespace().next().unwrap().to_string()))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn query_schedule(
+        connection: &PooledConnection<SqliteConnectionManager>,
+        date: &str,
+        name: &str,
+    ) -> rusqlite::Result<Option<String>> {
+        // SQL Injections are automatically handled by rusqlite
+        // Name should already be sanitized!
+        let mut statement = connection.prepare(&format!(
+            "SELECT schedule FROM {}_schedule WHERE date LIKE ?1",
+            name
+        ))?;
+
+        let mut data = statement.query(rusqlite::params![date])?;
+        match data.next()? {
+            Some(data) => {
+                let data: String = data.get(0)?;
+                Ok(Some(data))
             }
             None => Ok(None),
         }
@@ -90,14 +123,24 @@ impl Server {
             Ok(data) => data,
             Err(err) => return Self::server_error(&err.to_string()),
         };
-        let mut results: Vec<(String, u16)> = Vec::new();
+        let mut occupancy_data: Vec<(String, u16)> = Vec::new();
         for pair in data {
             match pair {
-                Ok(pair) => results.push(pair),
+                Ok(pair) => occupancy_data.push(pair),
                 Err(_) => (),
             }
         }
-        Self::ok_data(results)
+
+        let schedule = match Self::query_schedule(connection, date, name) {
+            Ok(schedule) => match schedule {
+                None => return Self::no_data(),
+                Some(schedule) => schedule,
+            },
+            Err(err) => return Self::server_error(&err.to_string()),
+        };
+
+        let result = MyResponse::new(occupancy_data, schedule);
+        Self::ok_data(result)
     }
 
     fn day_data(&self, res: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
@@ -149,7 +192,7 @@ impl Server {
     fn ok_data<T: Serialize>(body: T) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let data = serde_json::to_string(&body).unwrap();
         let res = Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .status(StatusCode::OK)
             .body(Full::new(Bytes::from(format!("{{\"data\": {}}}", data))))
             .unwrap();
         Ok(res)
