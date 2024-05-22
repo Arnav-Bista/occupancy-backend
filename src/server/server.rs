@@ -9,11 +9,10 @@ use serde::Serialize;
 
 use std::{collections::HashMap, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
-use crate::timing::schedule::{self, Schedule};
-
 #[derive(Clone)]
 pub struct Server {
     connection_pool: Arc<Pool<SqliteConnectionManager>>,
+    name_sanitizer: Regex,
 }
 
 #[derive(Serialize)]
@@ -30,7 +29,10 @@ impl MyResponse {
 
 impl Server {
     pub fn setup(connection_pool: Arc<Pool<SqliteConnectionManager>>) -> Self {
-        Self { connection_pool }
+        Self {
+            connection_pool,
+            name_sanitizer: Regex::new(r"(\w+)").unwrap(),
+        }
     }
 
     fn parse_params(text: &str) -> Option<HashMap<String, String>> {
@@ -164,7 +166,7 @@ impl Server {
 
         // SQL Injections are automatically handled by rusqlite
         // Handle the table name manually
-        let name = match Regex::new(r"(\w+)").unwrap().captures(name) {
+        let name = match self.name_sanitizer.captures(name) {
             None => return Self::bad_request("Malformed Name"),
             Some(captures) => captures,
         };
