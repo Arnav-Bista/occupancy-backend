@@ -5,10 +5,11 @@ use http_body_util::Full;
 use hyper::{
     body::{Body, Incoming},
     service::Service,
-    Request, Response, StatusCode, Uri,
+    Method, Request, Response, StatusCode, Uri,
 };
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
+use regex::Regex;
 use rusqlite::{Connection, Statement};
 use serde::Serialize;
 
@@ -47,8 +48,10 @@ impl Server {
 
     fn get_last_day(
         connection: &PooledConnection<SqliteConnectionManager>,
+        name: &str,
     ) -> rusqlite::Result<Option<String>> {
-        let mut statement = connection.prepare("SELECT time FROM gym ORDER BY id DESC LIMIT 1")?;
+        // Name should already be sanitized!
+        let mut statement = connection.prepare(&format!("SELECT time FROM {} ORDER BY id DESC LIMIT 1", name))?;
         let mut data = statement.query(())?;
         match data.next()? {
             Some(data) => {
@@ -62,15 +65,31 @@ impl Server {
     fn query_day(
         connection: &PooledConnection<SqliteConnectionManager>,
         date: &str,
-    ) -> rusqlite::Result<Vec<(String, u16)>> {
+        name: &str,
+    ) -> Result<Response<Full<Bytes>>, hyper::Error> {
         // SQL Injections are automatically handled by rusqlite
-        let mut statement =
-            connection.prepare(r"SELECT time,occupancy FROM gym WHERE time LIKE :date || '%'")?;
-        let data = statement.query_map(&[(":date", &date)], |row| {
+        // Name should already be sanitized!
+        let mut statement = match connection.prepare(&format!(
+            "SELECT time,occupancy FROM {} WHERE time LIKE ?1 || '%'",
+            name
+        )) {
+            Ok(statement) => statement,
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("no such table") {
+                    return Self::not_found(&message);
+                }
+                return Self::server_error(&err.to_string());
+            }
+        };
+        let data = match statement.query_map(rusqlite::params![date], |row| {
             let time: String = row.get(0)?;
             let occupancy: u16 = row.get(1)?;
             Ok((time, occupancy))
-        })?;
+        }) {
+            Ok(data) => data,
+            Err(err) => return Self::server_error(&err.to_string()),
+        };
         let mut results: Vec<(String, u16)> = Vec::new();
         for pair in data {
             match pair {
@@ -78,39 +97,53 @@ impl Server {
                 Err(_) => (),
             }
         }
-        Ok(results)
+        Self::ok_data(results)
     }
 
     fn day_data(&self, res: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
-        // Not my proudest function 
+        // Not my proudest function
         let connection = match self.get_connection() {
             Ok(conn) => conn,
             Err(err) => return Self::server_error(&err),
         };
-        if let Some(params) = res.uri().query() {
-            if let Some(map) = Self::parse_params(params) {
-                if let Some(date) = map.get("date") {
-                    if NaiveDate::from_str(date).is_err() {
-                        return Self::bad_request("Malformed Date");
-                    }
-                    match Self::query_day(&connection, date) {
-                        Ok(data) => return Self::ok_data(data),
-                        Err(err) => return Self::server_error(&err.to_string()),
-                    }
-                }
+
+        let Some(params) = res.uri().query() else {
+            return Self::bad_request("Parameters not provided. Required name + Optional date.");
+        };
+
+        let Some(map) = Self::parse_params(params) else {
+            return Self::bad_request("Malformed Parameters.");
+        };
+
+        let Some(name) = map.get("name") else {
+            return Self::bad_request("name not provided.");
+        };
+
+        // SQL Injections are automatically handled by rusqlite
+        // Handle the table name manually
+        let name = match Regex::new(r"(\w+)").unwrap().captures(name) {
+            None => return Self::bad_request("Malformed Name"),
+            Some(captures) => captures,
+        };
+        let name = name.get(0).unwrap().as_str();
+        if name == "" {
+            return Self::bad_request("Malformed Name");
+        }
+
+        if let Some(date) = map.get("date") {
+            if NaiveDate::from_str(date).is_err() {
+                return Self::bad_request("Malformed Date");
             }
+            return Self::query_day(&connection, date, &name);
         }
         // Fetch the last recorded day's data instead
-        match Self::get_last_day(&connection) {
+        match Self::get_last_day(&connection, &name) {
             Err(err) => return Self::server_error(&err.to_string()),
             Ok(data) => match data {
                 None => return Self::no_data(),
-                Some(data) => match Self::query_day(&connection, &data) {
-                    Ok(data) => return Self::ok_data(data),
-                    Err(err) => return Self::server_error(&err.to_string()),
-                },
+                Some(data) => return Self::query_day(&connection, &data, &name),
             },
-        }
+        };
     }
 
     fn ok_data<T: Serialize>(body: T) -> Result<Response<Full<Bytes>>, hyper::Error> {
@@ -133,10 +166,14 @@ impl Server {
         Ok(res)
     }
 
-    fn not_found() -> Result<Response<Full<Bytes>>, hyper::Error> {
+    fn not_found(message: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let res = Response::builder()
             .status(StatusCode::NOT_FOUND)
-            .body(Full::new(Bytes::new()))
+            .body(Full::new(if message == "" {
+                Bytes::new()
+            } else {
+                Bytes::from(format!("{{\"error\": \"{}\" }}", message))
+            }))
             .unwrap();
         Ok(res)
     }
@@ -167,9 +204,12 @@ impl Service<Request<Incoming>> for Server {
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
     fn call(&self, req: Request<Incoming>) -> Self::Future {
-        let res = match req.uri().path() {
-            "/api/gym/day" => self.day_data(req),
-            _ => Server::not_found(),
+        let res = match req.method() {
+            &Method::GET => match req.uri().path() {
+                "/api/day" => self.day_data(req),
+                _ => Server::not_found(""),
+            },
+            _ => Server::not_found(""),
         };
 
         Box::pin(async { res })
