@@ -195,7 +195,7 @@ impl Server {
         let data = serde_json::to_string(&body).unwrap();
         let res = Response::builder()
             .status(StatusCode::OK)
-            .body(Full::new(Bytes::from(format!("{{\"data\": {}}}", data))))
+            .body(Full::new(Bytes::from(data)))
             .unwrap();
         Ok(res)
     }
