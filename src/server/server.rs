@@ -9,6 +9,8 @@ use serde::Serialize;
 
 use std::{collections::HashMap, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
+use crate::timing::schedule::Schedule;
+
 #[derive(Clone)]
 pub struct Server {
     connection_pool: Arc<Pool<SqliteConnectionManager>>,
@@ -18,11 +20,11 @@ pub struct Server {
 #[derive(Serialize)]
 struct MyResponse {
     data: Vec<(String, u16)>,
-    schedule: String,
+    schedule: Schedule,
 }
 
 impl MyResponse {
-    pub fn new(data: Vec<(String, u16)>, schedule: String) -> Self {
+    pub fn new(data: Vec<(String, u16)>, schedule: Schedule) -> Self {
         Self { data, schedule }
     }
 }
@@ -141,7 +143,8 @@ impl Server {
             Err(err) => return Self::server_error(&err.to_string()),
         };
 
-        let result = MyResponse::new(occupancy_data, schedule);
+
+        let result = MyResponse::new(occupancy_data, serde_json::from_str(&schedule).unwrap());
         Self::ok_data(result)
     }
 

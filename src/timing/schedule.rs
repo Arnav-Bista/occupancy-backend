@@ -1,12 +1,12 @@
-use chrono::{DateTime, Datelike, Timelike, Weekday};
+use chrono::{DateTime, Datelike, Timelike};
+use chrono::Weekday;
 use chrono_tz::Tz;
 
-use serde::Serialize;
-use tokio::time::{Instant, Duration};
+use serde::{Deserialize, Serialize};
 use super::daily::Daily;
 
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Schedule {
     timings: [Daily; 7],
     count: usize,
