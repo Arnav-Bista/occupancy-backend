@@ -14,6 +14,7 @@ jobs:
           port: ${{ secrets.PORT }}
           ssh-agent: yes
           script: |
+            bash
             cd ~/Projects/occupancy-backend
             eval "$(ssh-agent -s)"
             ssh-add ~/.ssh/personal_server
