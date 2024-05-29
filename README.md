@@ -12,6 +12,8 @@ This is the backend for the MyOccupancy Project. Written completely in Rust, it 
 - [`hyper.rs`](https://hyper.rs/) as the HTTP library to send HTTP responses as the server.
 - [`reqwest`](https://github.com/seanmonstar/reqwest) as the HTTP library to send HTTP requests as the client (for web scraping).
 
+- A little unrelated but there is also a very simple CD pipeline using GitHub Actions.
+
 ## Web Scraper
 
 The Web Scraper is very extendible as you can create your own scrapers and add
