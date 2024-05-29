@@ -80,6 +80,10 @@ impl Scraper {
         name: &str,
         schedule: Schedule,
     ) {
+        let timestamp = timestamp.naive_local();
+        let date = timestamp.date();
+        // TO ISO 8601
+        let timestamp = timestamp.format("%Y-%m-%dT%H:%M:%S").to_string();
         let connection = match connection_pool.get() {
             Ok(conn) => conn,
             Err(_) => {
@@ -90,13 +94,12 @@ impl Scraper {
 
         let result = connection.execute(
             &format!("INSERT INTO {} (time, occupancy) VALUES (?1, ?2)", &name),
-            (&timestamp.to_string(), &occupancy),
+            (&timestamp, &occupancy),
         );
         match result {
             Err(err) => println!("Error writing to database.\n{}", err.to_string()),
             _ => (),
         };
-        let date = timestamp.date_naive();
         let result = connection.execute(
             &format!(
                 "INSERT INTO {}_schedule (date, schedule) VALUES (?1, ?2)",
