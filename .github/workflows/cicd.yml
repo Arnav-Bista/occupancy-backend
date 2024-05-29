@@ -14,5 +14,8 @@ jobs:
           port: ${{ secrets.PORT }}
           ssh-agent: yes
           script: |
-            cd /home/arnav/Projects/occupancy-backend
-            touch HIIIII
+            cd ~/Projects/occupancy-backend
+            eval "$(ssh-agent -s)"
+            ssh-add ~/.ssh/personal_server
+            git pull
+            sudo systemctl restart myoccupancy.service
