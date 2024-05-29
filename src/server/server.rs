@@ -72,7 +72,8 @@ impl Server {
         match data.next()? {
             Some(data) => {
                 let data: String = data.get(0)?;
-                Ok(Some(data.split_whitespace().next().unwrap().to_string()))
+                let data = NaiveDateTime::from_str(&data).unwrap();
+                Ok(Some(data.date().to_string()))
             }
             None => Ok(None),
         }
