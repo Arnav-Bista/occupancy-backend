@@ -1,0 +1,17 @@
+name: MyOccupancy CICD
+
+on: [push]
+jobs: 
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+     - name: Deploy 
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOST }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.KEY}}
+          ssh-agent: yes
+          script: |
+            cd /home/arnav/Projects/occupancy-backend
+            touch HIIIII
