@@ -1,5 +1,6 @@
 use bytes::Bytes;
-use chrono::NaiveDate;
+use chrono::{format::parse, DateTime, FixedOffset, NaiveDate, NaiveDateTime};
+use chrono_tz::Tz;
 use http_body_util::Full;
 use hyper::{body::Incoming, service::Service, Method, Request, Response, StatusCode};
 use r2d2::{Pool, PooledConnection};
@@ -143,7 +144,6 @@ impl Server {
             Err(err) => return Self::server_error(&err.to_string()),
         };
 
-
         let result = MyResponse::new(occupancy_data, serde_json::from_str(&schedule).unwrap());
         Self::ok_data(result)
     }
@@ -192,6 +192,91 @@ impl Server {
                 Some(data) => return Self::query_day(&connection, &data, &name),
             },
         };
+    }
+    fn query_from(
+        connection: &PooledConnection<SqliteConnectionManager>,
+        from: NaiveDateTime,
+        name: &str,
+    ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        let to = from + chrono::Duration::days(1);
+        let to = to.date().to_string();
+        let from_str = from.to_string();
+        let mut statement = match connection.prepare(&format!(
+            "SELECT time,occupancy FROM {} WHERE strftime('%s', time) BETWEEN strftime('%s', ?1) AND strftime('%s', ?2)",
+            name
+        )) {
+            Ok(statement) => statement,
+            Err(err) => {
+                let message = err.to_string();
+                if message.contains("no such table") {
+                    return Self::not_found(&message);
+                }
+                return Self::server_error(&err.to_string());
+            }
+        };
+
+        let data = match statement.query_map(rusqlite::params![from_str, to], |row| {
+            let time: String = row.get(0)?;
+            let occupancy: u16 = row.get(1)?;
+            Ok((time, occupancy))
+        }) {
+            Ok(data) => data,
+            Err(err) => return Self::server_error(&err.to_string()),
+        };
+        let mut occupancy_data: Vec<(String, u16)> = Vec::new();
+        for pair in data {
+            match pair {
+                Ok(pair) => occupancy_data.push(pair),
+                Err(_) => (),
+            }
+        }
+        let schedule = match Self::query_schedule(connection, &from.date().to_string(), name) {
+            Ok(schedule) => match schedule {
+                None => return Self::no_data(),
+                Some(schedule) => schedule,
+            },
+            Err(err) => return Self::server_error(&err.to_string()),
+        };
+
+        let result = MyResponse::new(occupancy_data, serde_json::from_str(&schedule).unwrap());
+        Self::ok_data(result)
+    }
+
+    fn from_last(&self, res: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
+        let connection = match self.get_connection() {
+            Ok(conn) => conn,
+            Err(err) => return Self::server_error(&err),
+        };
+
+        let Some(params) = res.uri().query() else {
+            return Self::bad_request("Parameters not provided. Required name + Required from.");
+        };
+
+        let Some(map) = Self::parse_params(params) else {
+            return Self::bad_request("Malformed Parameters.");
+        };
+
+        let Some(name) = map.get("name") else {
+            return Self::bad_request("name not provided.");
+        };
+
+        let Some(from) = map.get("from") else {
+            return Self::bad_request("from not provided.");
+        };
+
+        let name = match self.name_sanitizer.captures(name) {
+            None => return Self::bad_request("Malformed Name"),
+            Some(captures) => captures,
+        };
+        let name = name.get(0).unwrap().as_str();
+        if name.is_empty() {
+            return Self::bad_request("Malformed Name");
+        }
+        let from: NaiveDateTime = match NaiveDateTime::from_str(from) {
+            Ok(date) => date,
+            Err(_) => return Self::bad_request("Malformed Date"),
+        };
+        Self::query_from(&connection, from, name)
     }
 
     fn ok_data<T: Serialize>(body: T) -> Result<Response<Full<Bytes>>, hyper::Error> {
@@ -255,6 +340,7 @@ impl Service<Request<Incoming>> for Server {
         let res = match req.method() {
             &Method::GET => match req.uri().path() {
                 "/api/day" => self.day_data(req),
+                "/api/from" => self.from_last(req),
                 _ => Server::not_found(""),
             },
             _ => Server::not_found(""),
