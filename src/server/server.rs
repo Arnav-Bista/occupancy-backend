@@ -7,6 +7,7 @@ use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
 use regex::Regex;
 use serde::Serialize;
+use url_escape::decode;
 
 use std::{collections::HashMap, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
@@ -42,7 +43,7 @@ impl Server {
         let mut map: HashMap<String, String> = HashMap::new();
         for pairs in text.split('&').into_iter() {
             let mut iterator = pairs.split('=').into_iter();
-            map.insert(iterator.next()?.to_string(), iterator.next()?.to_string());
+            map.insert(iterator.next()?.to_string(), decode(iterator.next()?).to_string());
         }
         Some(map)
     }
