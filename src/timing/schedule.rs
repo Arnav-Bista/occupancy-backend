@@ -6,9 +6,10 @@ use serde::{Deserialize, Serialize};
 use super::daily::Daily;
 
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Schedule {
     timings: [Daily; 7],
+    #[serde(skip)]
     count: usize,
     // standard_interval_min: u16
 }
@@ -21,6 +22,10 @@ impl Schedule {
             count: 0,
             // standard_interval_min: 5
         }
+    }
+
+    pub fn get_timings(&self) -> &[Daily; 7] {
+        &self.timings
     }
 
     pub fn add_timing(&mut self, timing: Daily) ->  Result<(),()> {

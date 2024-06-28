@@ -1,12 +1,11 @@
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use chrono_tz::Tz;
 use regex::Regex;
 use reqwest::{Client, Method, RequestBuilder};
 use serde::Deserialize;
 
 use crate::{
-    scraper::scraper::Scrape,
-    timing::{daily::Daily, schedule::Schedule, uk_datetime_now::uk_datetime_now},
+    predictor::knn_regressor::KNNRegressor, scraper::scraper::Scrape, timing::{daily::Daily, schedule::Schedule, uk_datetime_now::uk_datetime_now}, ISO_FORMAT
 };
 
 pub struct MainLibrary {
@@ -14,6 +13,7 @@ pub struct MainLibrary {
     schedule_url: String,
     client: Client,
     user_agent: String,
+    last_scraped: Option<NaiveDateTime>,
     // Some more regex
     schedule_regex: Regex,
     schedule_entry_regex: Regex,
@@ -29,13 +29,20 @@ struct APIResponse {
 }
 
 impl MainLibrary {
-    pub fn new() -> Self {
+    pub fn new(last_scraped: Option<String>) -> Self {
+        let last_scraped = match last_scraped {
+            Some(date) => Some(NaiveDateTime::parse_from_str(&date, ISO_FORMAT).unwrap()),
+            None => None,
+        };
+
         Self {
             url: "https://www.st-andrews.ac.uk/library/sentry-api/current-occupancy".to_string(),
             schedule_url: "https://www.st-andrews.ac.uk/library/".to_string(),
             user_agent: "Mozilla/5.0".to_string(),
             client: Client::new(),
-            schedule_regex: Regex::new("<dd class=\"paired-values-list__value\">(.*?)</dd>") .unwrap(),
+            last_scraped,
+            schedule_regex: Regex::new("<dd class=\"paired-values-list__value\">(.*?)</dd>")
+                .unwrap(),
             schedule_entry_regex: Regex::new(r"(\d+)(\w+)\sto\s(\d+)(\w+)|CLOSED").unwrap(),
         }
     }
@@ -103,7 +110,7 @@ impl Scrape<MainLibrary> for MainLibrary {
     fn parse_occupancy(&self, body: &str) -> Option<u16> {
         let response: APIResponse = match serde_json::from_str(body) {
             Err(_) => return None,
-            Ok(data) => data
+            Ok(data) => data,
         };
         // dbg!(&response);
         Some(((response.total * 100) / response.capacity) as u16)
@@ -127,10 +134,22 @@ impl Scrape<MainLibrary> for MainLibrary {
                 continue;
             }
             let _ = schedule.add_timing(Daily::new_open(
-                self.parse_timings(timings.get(1).unwrap().as_str(), timings.get(2).unwrap().as_str()),
-                self.parse_timings(timings.get(3).unwrap().as_str(), timings.get(4).unwrap().as_str()),
+                self.parse_timings(
+                    timings.get(1).unwrap().as_str(),
+                    timings.get(2).unwrap().as_str(),
+                ),
+                self.parse_timings(
+                    timings.get(3).unwrap().as_str(),
+                    timings.get(4).unwrap().as_str(),
+                ),
             ));
         }
         Some(schedule)
     }
+
+
+    fn get_last_updated(&self) -> Option<NaiveDateTime> {
+        self.last_scraped
+    }
+
 }

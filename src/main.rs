@@ -1,6 +1,8 @@
 mod scraper;
 mod server;
 mod timing;
+mod predictor;
+mod database;
 
 use std::sync::Arc;
 
@@ -10,6 +12,8 @@ use r2d2_sqlite::SqliteConnectionManager;
 use scraper::scraper::Scraper;
 use server::server::Server;
 use tokio::net::TcpListener;
+
+pub const ISO_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 
 #[tokio::main]
 async fn main() {

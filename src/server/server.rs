@@ -1,6 +1,5 @@
 use bytes::Bytes;
-use chrono::{format::parse, DateTime, FixedOffset, NaiveDate, NaiveDateTime};
-use chrono_tz::Tz;
+use chrono::{NaiveDate, NaiveDateTime};
 use http_body_util::Full;
 use hyper::{body::Incoming, service::Service, Method, Request, Response, StatusCode};
 use r2d2::{Pool, PooledConnection};
@@ -11,24 +10,14 @@ use url_escape::decode;
 
 use std::{collections::HashMap, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
-use crate::timing::schedule::Schedule;
+use crate::database::sqlite::SqliteDatabase;
+
+use super::myresponse::MyResponse;
 
 #[derive(Clone)]
 pub struct Server {
     connection_pool: Arc<Pool<SqliteConnectionManager>>,
     name_sanitizer: Regex,
-}
-
-#[derive(Serialize)]
-struct MyResponse {
-    data: Vec<(String, u16)>,
-    schedule: Schedule,
-}
-
-impl MyResponse {
-    pub fn new(data: Vec<(String, u16)>, schedule: Schedule) -> Self {
-        Self { data, schedule }
-    }
 }
 
 impl Server {
@@ -43,7 +32,10 @@ impl Server {
         let mut map: HashMap<String, String> = HashMap::new();
         for pairs in text.split('&').into_iter() {
             let mut iterator = pairs.split('=').into_iter();
-            map.insert(iterator.next()?.to_string(), decode(iterator.next()?).to_string());
+            map.insert(
+                iterator.next()?.to_string(),
+                decode(iterator.next()?).to_string(),
+            );
         }
         Some(map)
     }
@@ -60,85 +52,20 @@ impl Server {
         }
     }
 
-    fn get_last_day(
+    fn get_single_day(
         connection: &PooledConnection<SqliteConnectionManager>,
-        name: &str,
-    ) -> rusqlite::Result<Option<String>> {
-        // Name should already be sanitized!
-        let mut statement = connection.prepare(&format!(
-            "SELECT time FROM {} ORDER BY id DESC LIMIT 1",
-            name
-        ))?;
-        let mut data = statement.query(())?;
-        match data.next()? {
-            Some(data) => {
-                let data: String = data.get(0)?;
-                let data = NaiveDateTime::from_str(&data).unwrap();
-                Ok(Some(data.date().to_string()))
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn query_schedule(
-        connection: &PooledConnection<SqliteConnectionManager>,
-        date: &str,
-        name: &str,
-    ) -> rusqlite::Result<Option<String>> {
-        // SQL Injections are automatically handled by rusqlite
-        // Name should already be sanitized!
-        let mut statement = connection.prepare(&format!(
-            "SELECT schedule FROM {}_schedule WHERE date LIKE ?1",
-            name
-        ))?;
-
-        let mut data = statement.query(rusqlite::params![date])?;
-        match data.next()? {
-            Some(data) => {
-                let data: String = data.get(0)?;
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    fn query_day(
-        connection: &PooledConnection<SqliteConnectionManager>,
-        date: &str,
+        date: NaiveDate,
         name: &str,
     ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-        // SQL Injections are automatically handled by rusqlite
-        // Name should already be sanitized!
-        let mut statement = match connection.prepare(&format!(
-            "SELECT time,occupancy FROM {} WHERE time LIKE ?1 || '%'",
-            name
-        )) {
-            Ok(statement) => statement,
-            Err(err) => {
-                let message = err.to_string();
-                if message.contains("no such table") {
-                    return Self::not_found(&message);
-                }
-                return Self::server_error(&err.to_string());
-            }
-        };
-        let data = match statement.query_map(rusqlite::params![date], |row| {
-            let time: String = row.get(0)?;
-            let occupancy: u16 = row.get(1)?;
-            Ok((time, occupancy))
-        }) {
-            Ok(data) => data,
-            Err(err) => return Self::server_error(&err.to_string()),
-        };
-        let mut occupancy_data: Vec<(String, u16)> = Vec::new();
-        for pair in data {
-            match pair {
-                Ok(pair) => occupancy_data.push(pair),
-                Err(_) => (),
-            }
-        }
-
-        let schedule = match Self::query_schedule(connection, date, name) {
+        let data: Vec<(String, u16)> =
+            match SqliteDatabase::query_single_day(connection, name, date) {
+                Ok(data) => data,
+                Err(err) => match err {
+                    rusqlite::Error::QueryReturnedNoRows => return Self::no_data(),
+                    _ => return Self::server_error(&err.to_string()),
+                },
+            };
+        let schedule = match SqliteDatabase::query_single_day_schedule(connection, name, date) {
             Ok(schedule) => match schedule {
                 None => return Self::no_data(),
                 Some(schedule) => schedule,
@@ -146,7 +73,7 @@ impl Server {
             Err(err) => return Self::server_error(&err.to_string()),
         };
 
-        let result = MyResponse::new(occupancy_data, serde_json::from_str(&schedule).unwrap());
+        let result = MyResponse::new(data, serde_json::from_str(&schedule).unwrap(), Vec::new());
         Self::ok_data(result)
     }
 
@@ -181,17 +108,23 @@ impl Server {
         }
 
         if let Some(date) = map.get("date") {
-            if NaiveDate::from_str(date).is_err() {
-                return Self::bad_request("Malformed Date");
+            if let Ok(date) = NaiveDate::from_str(date) {
+                return Self::get_single_day(&connection, date, &name);
             }
-            return Self::query_day(&connection, date, &name);
+            return Self::bad_request("Malformed Date");
         }
         // Fetch the last recorded day's data instead
-        match Self::get_last_day(&connection, &name) {
+
+        match SqliteDatabase::query_last_day(&connection, &name) {
             Err(err) => return Self::server_error(&err.to_string()),
             Ok(data) => match data {
                 None => return Self::no_data(),
-                Some(data) => return Self::query_day(&connection, &data, &name),
+                Some(data) => match NaiveDate::from_str(&data) {
+                    Err(_) => return Self::server_error("Could not parse date"),
+                    Ok(date) => {
+                        return Self::get_single_day(&connection, date, &name);
+                    }
+                },
             },
         };
     }
@@ -201,46 +134,29 @@ impl Server {
         name: &str,
     ) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let to = from + chrono::Duration::days(1);
-        let to = to.date().to_string();
-        let from_str = from.to_string();
-        let mut statement = match connection.prepare(&format!(
-            "SELECT time,occupancy FROM {} WHERE strftime('%s', time) BETWEEN strftime('%s', ?1) AND strftime('%s', ?2)",
-            name
-        )) {
-            Ok(statement) => statement,
-            Err(err) => {
-                let message = err.to_string();
-                if message.contains("no such table") {
-                    return Self::not_found(&message);
-                }
-                return Self::server_error(&err.to_string());
-            }
-        };
 
-        let data = match statement.query_map(rusqlite::params![from_str, to], |row| {
-            let time: String = row.get(0)?;
-            let occupancy: u16 = row.get(1)?;
-            Ok((time, occupancy))
-        }) {
+        let occupancy_data = match SqliteDatabase::query_range(connection, name, from, to) {
             Ok(data) => data,
-            Err(err) => return Self::server_error(&err.to_string()),
-        };
-        let mut occupancy_data: Vec<(String, u16)> = Vec::new();
-        for pair in data {
-            match pair {
-                Ok(pair) => occupancy_data.push(pair),
-                Err(_) => (),
-            }
-        }
-        let schedule = match Self::query_schedule(connection, &from.date().to_string(), name) {
-            Ok(schedule) => match schedule {
-                None => return Self::no_data(),
-                Some(schedule) => schedule,
+            Err(err) => match err {
+                rusqlite::Error::QueryReturnedNoRows => return Self::no_data(),
+                _ => return Self::server_error(&err.to_string()),
             },
-            Err(err) => return Self::server_error(&err.to_string()),
         };
 
-        let result = MyResponse::new(occupancy_data, serde_json::from_str(&schedule).unwrap());
+        let schedule =
+            match SqliteDatabase::query_single_day_schedule(connection, name, from.date()) {
+                Ok(schedule) => match schedule {
+                    None => return Self::no_data(),
+                    Some(schedule) => schedule,
+                },
+                Err(err) => return Self::server_error(&err.to_string()),
+            };
+
+        let result = MyResponse::new(
+            occupancy_data,
+            serde_json::from_str(&schedule).unwrap(),
+            Vec::new(),
+        );
         Self::ok_data(result)
     }
 

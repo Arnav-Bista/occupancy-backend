@@ -1,7 +1,10 @@
+use chrono::{NaiveDate, NaiveDateTime};
 use regex::Regex;
 use reqwest::Client;
 use reqwest::{Method, RequestBuilder};
 
+use crate::predictor::knn_regressor::KNNRegressor;
+use crate::ISO_FORMAT;
 use crate::{
     scraper::scraper::Scrape,
     timing::{daily::Daily, schedule::Schedule},
@@ -11,6 +14,7 @@ pub struct Gym {
     url: String,
     user_agent: String,
     client: Client,
+    last_scraped: Option<NaiveDateTime>,
     // Man I love regex
     occupancy_regex: Regex,
     schedule_regex: Regex,
@@ -19,11 +23,17 @@ pub struct Gym {
 }
 
 impl Gym {
-    pub fn new() -> Self {
+    pub fn new(last_scraped: Option<String>) -> Self {
+        let last_scraped = match last_scraped {
+            Some(date) => Some(NaiveDateTime::parse_from_str(&date, ISO_FORMAT).unwrap()),
+            None => None,
+        };
+
         Self {
             url: "https://sport.wp.st-andrews.ac.uk/".to_string(),
             user_agent: "Mozilla/5.0".to_string(),
             client: Client::new(),
+            last_scraped,
             // 🗿
             occupancy_regex: Regex::new(r"Occupancy:\s+(\d+)%").unwrap(),
             schedule_regex: Regex::new("<dd class=\"paired-values-list__value\">(.*?)</dd>")
@@ -104,5 +114,10 @@ impl Scrape<Gym> for Gym {
         self.client
             .request(Method::GET, &self.url)
             .header("User-Agent", &self.user_agent)
+    }
+    
+
+    fn get_last_updated(&self) -> Option<NaiveDateTime> {
+        self.last_scraped
     }
 }
