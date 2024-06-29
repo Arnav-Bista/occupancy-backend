@@ -5,7 +5,7 @@ use reqwest::{Client, Method, RequestBuilder};
 use serde::Deserialize;
 
 use crate::{
-    predictor::knn_regressor::KNNRegressor, scraper::scraper::Scrape, timing::{daily::Daily, schedule::Schedule, uk_datetime_now::uk_datetime_now}, ISO_FORMAT
+    predictor::knn_regressor::KNNRegressor, scraper::scraper::Scrape, timing::{daily::Daily, schedule::Schedule, uk_datetime_now::uk_datetime_now}, ISO_FORMAT, ISO_FORMAT_DATE
 };
 
 pub struct MainLibrary {
@@ -13,7 +13,7 @@ pub struct MainLibrary {
     schedule_url: String,
     client: Client,
     user_agent: String,
-    last_scraped: Option<NaiveDateTime>,
+    last_scraped: Option<NaiveDate>,
     // Some more regex
     schedule_regex: Regex,
     schedule_entry_regex: Regex,
@@ -31,7 +31,7 @@ struct APIResponse {
 impl MainLibrary {
     pub fn new(last_scraped: Option<String>) -> Self {
         let last_scraped = match last_scraped {
-            Some(date) => Some(NaiveDateTime::parse_from_str(&date, ISO_FORMAT).unwrap()),
+            Some(date) => Some(NaiveDate::parse_from_str(&date, ISO_FORMAT_DATE).unwrap()),
             None => None,
         };
 
@@ -112,7 +112,6 @@ impl Scrape<MainLibrary> for MainLibrary {
             Err(_) => return None,
             Ok(data) => data,
         };
-        // dbg!(&response);
         Some(((response.total * 100) / response.capacity) as u16)
     }
 
@@ -147,8 +146,11 @@ impl Scrape<MainLibrary> for MainLibrary {
         Some(schedule)
     }
 
+    fn set_last_updated(&mut self, last_updated: NaiveDate) {
+        self.last_scraped = Some(last_updated);
+    }
 
-    fn get_last_updated(&self) -> Option<NaiveDateTime> {
+    fn get_last_updated(&self) -> Option<NaiveDate> {
         self.last_scraped
     }
 

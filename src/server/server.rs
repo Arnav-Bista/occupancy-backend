@@ -65,6 +65,17 @@ impl Server {
                     _ => return Self::server_error(&err.to_string()),
                 },
             };
+        let knn_prediction: Vec<(String, u16)> = match SqliteDatabase::query_single_day(
+            connection,
+            &format!("{}{}", name, "_prediction_knn"),
+            date,
+        ) {
+            Ok(data) => data,
+            Err(err) => match err {
+                rusqlite::Error::QueryReturnedNoRows => return Self::no_data(),
+                _ => return Self::server_error(&err.to_string()),
+            },
+        };
         let schedule = match SqliteDatabase::query_single_day_schedule(connection, name, date) {
             Ok(schedule) => match schedule {
                 None => return Self::no_data(),
@@ -73,7 +84,7 @@ impl Server {
             Err(err) => return Self::server_error(&err.to_string()),
         };
 
-        let result = MyResponse::new(data, serde_json::from_str(&schedule).unwrap(), Vec::new());
+        let result = MyResponse::new(data, serde_json::from_str(&schedule).unwrap(), knn_prediction);
         Self::ok_data(result)
     }
 

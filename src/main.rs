@@ -14,6 +14,7 @@ use server::server::Server;
 use tokio::net::TcpListener;
 
 pub const ISO_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
+pub const ISO_FORMAT_DATE: &str = "%Y-%m-%d";
 
 #[tokio::main]
 async fn main() {

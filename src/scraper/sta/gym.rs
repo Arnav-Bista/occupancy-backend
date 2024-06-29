@@ -3,18 +3,17 @@ use regex::Regex;
 use reqwest::Client;
 use reqwest::{Method, RequestBuilder};
 
-use crate::predictor::knn_regressor::KNNRegressor;
-use crate::ISO_FORMAT;
 use crate::{
     scraper::scraper::Scrape,
     timing::{daily::Daily, schedule::Schedule},
 };
+use crate::{ISO_FORMAT, ISO_FORMAT_DATE};
 
 pub struct Gym {
     url: String,
     user_agent: String,
     client: Client,
-    last_scraped: Option<NaiveDateTime>,
+    last_scraped: Option<NaiveDate>,
     // Man I love regex
     occupancy_regex: Regex,
     schedule_regex: Regex,
@@ -25,7 +24,7 @@ pub struct Gym {
 impl Gym {
     pub fn new(last_scraped: Option<String>) -> Self {
         let last_scraped = match last_scraped {
-            Some(date) => Some(NaiveDateTime::parse_from_str(&date, ISO_FORMAT).unwrap()),
+            Some(date) => Some(NaiveDate::parse_from_str(&date, ISO_FORMAT_DATE).unwrap()),
             None => None,
         };
 
@@ -115,9 +114,12 @@ impl Scrape<Gym> for Gym {
             .request(Method::GET, &self.url)
             .header("User-Agent", &self.user_agent)
     }
-    
 
-    fn get_last_updated(&self) -> Option<NaiveDateTime> {
+    fn set_last_updated(&mut self, last_updated: NaiveDate) {
+        self.last_scraped = Some(last_updated);
+    }
+
+    fn get_last_updated(&self) -> Option<NaiveDate> {
         self.last_scraped
     }
 }

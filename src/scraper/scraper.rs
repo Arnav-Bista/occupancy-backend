@@ -1,10 +1,11 @@
-use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveDateTime, TimeDelta};
+use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveDateTime, TimeDelta, Timelike};
 use chrono_tz::Tz;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use reqwest::RequestBuilder;
 use tokio::time::{sleep_until, Duration, Instant};
 
+use core::panic;
 use std::{collections::HashMap, f64, fs, path::Path, sync::Arc};
 
 use crate::{
@@ -56,6 +57,14 @@ impl Scraper {
         Ok(map)
     }
 
+    fn update_knn_config(name: &str, data: &str) -> Result<(), String> {
+        let path = Path::new("knn_config/").join(name);
+        match fs::write(path, data) {
+            Ok(_) => Ok(()),
+            Err(err) => Err(err.to_string()),
+        }
+    }
+
     pub async fn run(self) {
         let gym = Gym::new(self.knn_config.get("gym").cloned());
         let library = MainLibrary::new(self.knn_config.get("main_library").cloned());
@@ -66,7 +75,7 @@ impl Scraper {
 
     async fn run_scraper<T: Scrape<T>>(
         connection_pool: Arc<Pool<SqliteConnectionManager>>,
-        target: T,
+        mut target: T,
     ) {
         loop {
             let (occupancy, schedule, timestamp) = match target.scrape(target.get_request()).await {
@@ -86,17 +95,27 @@ impl Scraper {
             let occupancy = occupancy.unwrap();
             let schedule = schedule.unwrap();
 
+            let connection = match connection_pool.get() {
+                Ok(conn) => conn,
+                Err(_) => {
+                    println!("Could not get database connection - Scrape.");
+                    return;
+                }
+            };
+
             if schedule.is_open(timestamp) {
-                Self::write_to_database(
-                    &connection_pool,
-                    occupancy,
-                    timestamp,
+                match SqliteDatabase::insert_one_occupancy(
+                    &connection,
                     &T::table_name(),
-                    &schedule,
-                );
+                    timestamp.naive_local(),
+                    occupancy,
+                ) {
+                    Err(err) => println!("Error writing to database.\n{}", err.to_string()),
+                    _ => (),
+                };
             }
 
-            check_and_predict(&target, &connection_pool, &schedule);
+            Self::check_and_predict(&mut target, &connection_pool, &schedule);
 
             Self::standard_sleep().await;
         }
@@ -104,49 +123,6 @@ impl Scraper {
 
     async fn standard_sleep() {
         sleep_until(Instant::now() + Duration::from_secs(30 * 10)).await;
-    }
-
-    fn write_to_database(
-        connection_pool: &Arc<Pool<SqliteConnectionManager>>,
-        occupancy: u16,
-        timestamp: DateTime<Tz>,
-        name: &str,
-        schedule: &Schedule,
-    ) {
-        let timestamp = timestamp.naive_local();
-        let date = timestamp.date();
-        // TO ISO 8601
-        let timestamp = timestamp.format("%Y-%m-%dT%H:%M:%S").to_string();
-        let connection = match connection_pool.get() {
-            Ok(conn) => conn,
-            Err(_) => {
-                println!("Could not get database connection");
-                return;
-            }
-        };
-
-        let result = connection.execute(
-            &format!("INSERT INTO {} (time, occupancy) VALUES (?1, ?2)", &name),
-            (&timestamp, &occupancy),
-        );
-        match result {
-            Err(err) => println!("Error writing to database.\n{}", err.to_string()),
-            _ => (),
-        };
-        let result = connection.execute(
-            &format!(
-                "INSERT INTO {}_schedule (date, schedule) VALUES (?1, ?2)",
-                &name
-            ),
-            (
-                &date.to_string(),
-                &serde_json::to_string(&schedule).unwrap(),
-            ),
-        );
-        match result {
-            Err(err) => println!("Error writing to database.\n{}", err.to_string()),
-            _ => (),
-        };
     }
 
     fn create_table(
@@ -173,7 +149,7 @@ impl Scraper {
             Err(_) => return Err(format!("Could not create table '{}'.", name).to_string()),
             _ => (),
         };
-        let name = name.to_string() + "_schedule";
+        let table_name = name.to_string() + "_schedule";
         match connection.execute(
             &format!(
                 "CREATE TABLE IF NOT EXISTS {} (
@@ -181,37 +157,37 @@ impl Scraper {
                     date TEXT NOT NULL,
                     schedule NOT NULL
                 )",
-                name
+                table_name
             ),
             (),
         ) {
             Err(_) => return Err(format!("Could not create table '{}'.", name).to_string()),
             _ => (),
         };
-        let name = name.to_string() + "_prediction_knn";
+        let table_name = name.to_string() + "_prediction_knn";
         match connection.execute(
             &format!(
                 "CREATE TABLE IF NOT EXISTS {} (
                     id INTEGER PRIMARY KEY,
-                    date TEXT NOT NULL,
-                    schedule NOT NULL
+                    time TEXT NOT NULL,
+                    occupancy INTEGER NOT NULL
                 )",
-                name
+                table_name
             ),
             (),
         ) {
             Err(_) => return Err(format!("Could not create table '{}'.", name).to_string()),
             _ => (),
         };
-        let name = name.to_string() + "_prediction_lstm";
+        let table_name = name.to_string() + "_prediction_lstm";
         match connection.execute(
             &format!(
                 "CREATE TABLE IF NOT EXISTS {} (
                     id INTEGER PRIMARY KEY,
-                    date TEXT NOT NULL,
-                    schedule NOT NULL
+                    time TEXT NOT NULL,
+                    occupancy INTEGER NOT NULL
                 )",
-                name
+                table_name
             ),
             (),
         ) {
@@ -222,11 +198,11 @@ impl Scraper {
     }
 
     fn check_and_predict<T: Scrape<T>>(
-        target: &T,
+        target: &mut T,
         connection_pool: &Arc<Pool<SqliteConnectionManager>>,
         schedule: &Schedule,
     ) {
-        let today = uk_datetime_now().naive_local();
+        let today = uk_datetime_now().naive_local().date();
         let next_week = today.checked_add_days(Days::new(7)).unwrap();
         let last_updated = target.get_last_updated();
 
@@ -240,20 +216,14 @@ impl Scraper {
                 Self::make_knn_predictions(
                     target,
                     connection_pool,
-                    last_updated.date(),
-                    next_week.date(),
+                    last_updated,
+                    next_week,
                     schedule,
                 );
             }
             None => {
                 // Assume data is not there.
-                Self::make_knn_predictions(
-                    target,
-                    connection_pool,
-                    today.date(),
-                    next_week.date(),
-                    schedule,
-                )
+                Self::make_knn_predictions(target, connection_pool, today, next_week, schedule)
             }
         }
     }
@@ -270,11 +240,12 @@ impl Scraper {
             Ok(connection) => connection,
             Err(err) => return Err("Could not get connection.".to_string()),
         };
-        let table_name = T::table_name();
+        let table_name = &T::table_name();
         let data = match SqliteDatabase::query_range(&connection, &table_name, from, to) {
             Ok(data) => data,
             Err(err) => return Err(err.to_string()),
         };
+
 
         let data: Vec<(NaiveDateTime, u16)> = data
             .iter()
@@ -284,23 +255,22 @@ impl Scraper {
             })
             .collect();
 
-        let mut grouped_data: Vec<Vec<(NaiveDateTime, u16)>> = Vec::with_capacity(7);
+        let mut grouped_data: Vec<Vec<(NaiveDateTime, u16)>> = vec![Vec::new(); 7];
         for element in data {
             let day = element.0.weekday().number_from_monday() - 1;
             grouped_data[day as usize].push(element);
         }
-
         Ok(grouped_data)
     }
 
     fn make_knn_predictions<T: Scrape<T>>(
-        target: &T,
+        target: &mut T,
         connection_pool: &Arc<Pool<SqliteConnectionManager>>,
         from: NaiveDate,
         to: NaiveDate,
         schedule: &Schedule,
     ) {
-        let data = match Self::get_last_n_weeks_data_grouped(target, connection_pool, 4) {
+        let data = match Self::get_last_n_weeks_data_grouped(target, connection_pool, 3) {
             Ok(data) => data,
             Err(err) => {
                 println!("Could not get data for KNN predictions.\n{}", err);
@@ -313,6 +283,9 @@ impl Scraper {
         let timings = schedule.get_timings();
         let mut current_date = from;
         while current_date <= to {
+            // To keep track of the DateTime for later
+            // Could probably be avoided by iterating through original vec tho
+            let mut original_time: Vec<NaiveDateTime> = Vec::new();
             // Construct the data
             let mut x: Vec<(f64, f64)> = Vec::new();
             let mut y: Vec<f64> = Vec::new();
@@ -333,7 +306,8 @@ impl Scraper {
 
             for (time, occupancy) in &data[index] {
                 let weight: f64 = 1.0 / ((opening - *time).num_weeks() + 1) as f64;
-                let time = time.and_utc().timestamp() as f64;
+                original_time.push(*time);
+                let time = time.num_seconds_from_midnight() as f64;
                 let occupancy = *occupancy as f64;
                 x.push((weight, time));
                 y.push(occupancy);
@@ -342,19 +316,16 @@ impl Scraper {
             let predictions = KNNRegressor::predict_range(
                 x,
                 y,
-                opening.and_utc().timestamp() as f64,
-                closing.and_utc().timestamp() as f64,
+                opening.num_seconds_from_midnight() as f64,
+                closing.num_seconds_from_midnight() as f64,
                 5.0 * 60.0,
-                9,
+                3,
             );
 
             // Convert timestamp back to NaiveDateTime
-            for (time, occupancy) in predictions {
-                let time = DateTime::from_timestamp(time as i64, 0)
-                    .unwrap()
-                    .naive_local();
-                let occupancy = occupancy as u16;
-                final_predictions.push((time, occupancy));
+            for ((_, occupancy), original) in predictions.iter().zip(original_time.iter()) {
+                let occupancy = *occupancy as u16;
+                final_predictions.push((*original, occupancy));
             }
             current_date = current_date.checked_add_days(Days::new(1)).unwrap();
         }
@@ -365,11 +336,22 @@ impl Scraper {
                 return;
             }
         };
-        SqliteDatabase::insert_many_occupancy(
+        match SqliteDatabase::insert_many_occupancy(
             &connection,
-            &format!("{}{}", T::table_name(), "_predictions_knn"),
+            &format!("{}{}", T::table_name(), "_prediction_knn"),
             final_predictions,
-        );
+        ) {
+            Err(err) => println!("Could not insert KNN predictions.\n{}", err),
+            _ => (),
+        };
+
+        // Update the last updated time
+        target.set_last_updated(to);
+        match Self::update_knn_config(&T::table_name(), &to.to_string()) {
+            Ok(_) => (),
+            Err(err) => println!("Could not update KNN config.\n{}", err),
+        };
+
     }
 }
 
@@ -403,5 +385,7 @@ pub trait Scrape<T> {
 
     fn parse_schedule(&self, body: &str) -> Option<Schedule>;
 
-    fn get_last_updated(&self) -> Option<NaiveDateTime>;
+    fn get_last_updated(&self) -> Option<NaiveDate>;
+
+    fn set_last_updated(&mut self, last_updated: NaiveDate);
 }
