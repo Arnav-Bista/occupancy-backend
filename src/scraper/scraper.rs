@@ -229,7 +229,7 @@ impl Scraper {
     }
 
     fn get_last_n_weeks_data_grouped<T: Scrape<T>>(
-        target: &T,
+        _target: &T,
         connection_pool: &Arc<Pool<SqliteConnectionManager>>,
         n: usize,
     ) -> Result<Vec<Vec<(NaiveDateTime, u16)>>, String> {
@@ -238,7 +238,7 @@ impl Scraper {
 
         let connection = match connection_pool.get() {
             Ok(connection) => connection,
-            Err(err) => return Err("Could not get connection.".to_string()),
+            Err(_) => return Err("Could not get connection.".to_string()),
         };
         let table_name = &T::table_name();
         let data = match SqliteDatabase::query_range(&connection, &table_name, from, to) {
@@ -283,9 +283,6 @@ impl Scraper {
         let timings = schedule.get_timings();
         let mut current_date = from;
         while current_date <= to {
-            // To keep track of the DateTime for later
-            // Could probably be avoided by iterating through original vec tho
-            let mut original_time: Vec<NaiveDateTime> = Vec::new();
             // Construct the data
             let mut x: Vec<(f64, f64)> = Vec::new();
             let mut y: Vec<f64> = Vec::new();
@@ -306,7 +303,6 @@ impl Scraper {
 
             for (time, occupancy) in &data[index] {
                 let weight: f64 = 1.0 / ((opening - *time).num_weeks() + 1) as f64;
-                original_time.push(*time);
                 let time = time.num_seconds_from_midnight() as f64;
                 let occupancy = *occupancy as f64;
                 x.push((weight, time));
@@ -323,9 +319,14 @@ impl Scraper {
             );
 
             // Convert timestamp back to NaiveDateTime
-            for ((_, occupancy), original) in predictions.iter().zip(original_time.iter()) {
+            for (time, occupancy) in predictions.iter() {
+                let time = current_date.and_hms_opt(
+                    (time / 3600.0) as u32,
+                    ((time % 3600.0) / 60.0) as u32,
+                    0,
+                ).unwrap();
                 let occupancy = *occupancy as u16;
-                final_predictions.push((*original, occupancy));
+                final_predictions.push((time, occupancy));
             }
             current_date = current_date.checked_add_days(Days::new(1)).unwrap();
         }
