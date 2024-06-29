@@ -1,2 +1,6 @@
 /target
+knn_config/
+*.backup
+*.bck
+*.old
 *.db
