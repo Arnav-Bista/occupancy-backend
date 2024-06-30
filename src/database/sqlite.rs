@@ -1,4 +1,3 @@
-use std::u32;
 
 use chrono::{NaiveDate, NaiveDateTime};
 use r2d2::PooledConnection;
@@ -30,6 +29,27 @@ impl SqliteDatabase {
                 let data: String = data.get(0)?;
                 let data = NaiveDateTime::parse_from_str(&data, ISO_FORMAT).unwrap();
                 Ok(Some(data.date().to_string()))
+            }
+            None => Ok(None),
+        }
+    }
+
+
+    pub fn query_last_day_schedule(
+        connection: &PooledConnection<SqliteConnectionManager>,
+        table_name: &str,
+    ) -> rusqlite::Result<Option<Schedule>> {
+        // Name should already be sanitized!
+        let mut statement = connection.prepare(&format!(
+            "SELECT schedule FROM {}_schedule ORDER BY date DESC LIMIT 1",
+            table_name
+        ))?;
+        let mut data = statement.query(())?;
+        match data.next()? {
+            Some(data) => {
+                let data: String = data.get(0)?;
+                let data: Schedule = serde_json::from_str(&data).unwrap();
+                Ok(Some(data))
             }
             None => Ok(None),
         }
