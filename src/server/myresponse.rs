@@ -2,6 +2,9 @@ use serde::Serialize;
 
 use crate::timing::schedule::Schedule;
 
+/// The Response struct that is used to send data back to the client.
+///
+/// This is pretty basic so far.
 
 #[derive(Serialize, Clone)]
 pub struct MyResponse {

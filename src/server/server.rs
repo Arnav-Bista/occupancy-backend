@@ -10,9 +10,20 @@ use url_escape::decode;
 
 use std::{collections::HashMap, future::Future, pin::Pin, str::FromStr, sync::Arc};
 
-use crate::database::sqlite::SqliteDatabase;
+use crate::{database::sqlite::SqliteDatabase, timing::schedule::Schedule};
 
 use super::myresponse::MyResponse;
+
+/// The Server
+///
+/// This is THE struct that handles all API endpoints and the business logic.
+/// The actual querying part is handled by functions from `SqliteDatabase`.
+///
+/// This struct implements the `Service` trait from `hyper` which allows it to be used as a
+/// hyper service. This allows us to send responses to requests from the client.
+///
+/// For each TCP connection or Client, a new thread is assigned to handle that request. We have to
+/// clone this struct for each thread to make it thread save and avoid race conditions.
 
 #[derive(Clone)]
 pub struct Server {
@@ -28,6 +39,8 @@ impl Server {
         }
     }
 
+    /// Parses the query parameters and returns a `hashmap` of key pair values
+    /// Returns `None` if the parameters are malformed
     fn parse_params(text: &str) -> Option<HashMap<String, String>> {
         let mut map: HashMap<String, String> = HashMap::new();
         for pairs in text.split('&').into_iter() {
@@ -40,6 +53,7 @@ impl Server {
         Some(map)
     }
 
+    /// Obtain a connection from the connection pool.
     fn get_connection(&self) -> Result<PooledConnection<SqliteConnectionManager>, String> {
         match self.connection_pool.get() {
             Err(err) => {
@@ -52,6 +66,17 @@ impl Server {
         }
     }
 
+    /// Fetches the data for a single day.
+    /// This is the /api/day API endpoint.
+    ///
+    /// Takes in a `connection` to query the database
+    /// `date` to fetch the data for
+    /// `name` of the table to fetch the data from
+    ///
+    /// Will return a 200 as long as there is at least a prediction for that day.
+    /// If there is no Schedule data, the last recorded Schedule will be returned.
+    ///
+    /// Will return a 204 when there is no data and no prediction.
     fn get_single_day(
         connection: &PooledConnection<SqliteConnectionManager>,
         date: NaiveDate,
@@ -61,10 +86,11 @@ impl Server {
             match SqliteDatabase::query_single_day(connection, name, date) {
                 Ok(data) => data,
                 Err(err) => match err {
-                    rusqlite::Error::QueryReturnedNoRows => return Self::no_data(),
+                    rusqlite::Error::QueryReturnedNoRows => Vec::new(),
                     _ => return Self::server_error(&err.to_string()),
                 },
             };
+        // If there is no prediction at all, return a 204, otherwise proceed
         let knn_prediction: Vec<(String, u16)> = match SqliteDatabase::query_single_day(
             connection,
             &format!("{}{}", name, "_prediction_knn"),
@@ -72,22 +98,42 @@ impl Server {
         ) {
             Ok(data) => data,
             Err(err) => match err {
-                rusqlite::Error::QueryReturnedNoRows => return Self::no_data(),
+                rusqlite::Error::QueryReturnedNoRows => {
+                    if data.is_empty() {
+                        return Self::no_data();
+                    }
+                    Vec::new()
+                }
                 _ => return Self::server_error(&err.to_string()),
             },
         };
-        let schedule = match SqliteDatabase::query_single_day_schedule(connection, name, date) {
-            Ok(schedule) => match schedule {
-                None => return Self::no_data(),
-                Some(schedule) => schedule,
-            },
-            Err(err) => return Self::server_error(&err.to_string()),
-        };
+        // Default to the last scraped Schedule if there is no schedule for the day
+        let schedule: Schedule =
+            match SqliteDatabase::query_single_day_schedule(connection, name, date) {
+                Ok(schedule) => match schedule {
+                    None => match SqliteDatabase::query_last_day_schedule(connection, name) {
+                        Ok(schedule) => match schedule {
+                            None => return Self::no_data(),
+                            Some(schedule) => schedule,
+                        },
+                        Err(err) => return Self::server_error(&err.to_string()),
+                    },
+                    Some(schedule) => serde_json::from_str(&schedule).unwrap(),
+                },
+                Err(err) => return Self::server_error(&err.to_string()),
+            };
 
-        let result = MyResponse::new(data, serde_json::from_str(&schedule).unwrap(), knn_prediction);
+        let result = MyResponse::new(data, schedule, knn_prediction);
         Self::ok_data(result)
     }
 
+    /// The /api/day API endpoint.
+    ///
+    /// This handles all the URL preprocessing before actually calling the function. Avoids
+    /// problems with SQL injections and handles invalid parameters beforehand.
+    ///
+    /// At the end, it calls the `get_single_day` function to fetch the data if a date is provided,
+    /// otherwise gets the last recorded day's data using `query_last_day` into `get_single_day`.
     fn day_data(&self, res: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
         // Not my proudest function
         let connection = match self.get_connection() {
@@ -139,6 +185,12 @@ impl Server {
             },
         };
     }
+
+    /// Fetches the data from a specific time onwards till the end of the day or the data that's
+    /// collected so far.
+    ///
+    /// It uses the `query_range` function to fetch the data and the `query_single_day_schedule`
+    /// for the schedule.
     fn query_from(
         connection: &PooledConnection<SqliteConnectionManager>,
         from: NaiveDateTime,
@@ -171,6 +223,11 @@ impl Server {
         Self::ok_data(result)
     }
 
+    /// The /api/from API endpoint.
+    ///
+    /// This is the endpoint the frontend should use when it already has some data for the day.
+    /// It will take in a datetime and return the rest of the data collected for that day.
+    /// Again, this handles all the preprocessing, the actual data fetching is done by `query_from`.
     fn from_last(&self, res: Request<Incoming>) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let connection = match self.get_connection() {
             Ok(conn) => conn,
@@ -208,6 +265,7 @@ impl Server {
         Self::query_from(&connection, from, name)
     }
 
+    /// Return a 200 OK response with the data provided.
     fn ok_data<T: Serialize>(body: T) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let data = serde_json::to_string(&body).unwrap();
         let res = Response::builder()
@@ -217,6 +275,7 @@ impl Server {
         Ok(res)
     }
 
+    /// Return a 500 Internal Server Error response with the message provided.
     fn server_error(message: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let res = Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -228,6 +287,8 @@ impl Server {
         Ok(res)
     }
 
+    /// Return a 404 Not Found response with the message provided. The message here is optional.
+    /// Leave it empty for no message.
     fn not_found(message: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let res = Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -240,6 +301,7 @@ impl Server {
         Ok(res)
     }
 
+    /// Return a 400 Bad Request response with the message provided.
     fn bad_request(message: &str) -> Result<Response<Full<Bytes>>, hyper::Error> {
         let res = Response::builder()
             .status(StatusCode::BAD_REQUEST)
@@ -251,6 +313,7 @@ impl Server {
         Ok(res)
     }
 
+    /// Return a 204 No Content response.
     fn no_data() -> Result<Response<Full<Bytes>>, hyper::Error> {
         let res = Response::builder()
             .status(StatusCode::NO_CONTENT)
