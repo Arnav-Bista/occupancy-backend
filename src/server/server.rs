@@ -107,6 +107,22 @@ impl Server {
                 _ => return Self::server_error(&err.to_string()),
             },
         };
+        let lstm_prediction: Vec<(String, u16)> = match SqliteDatabase::query_single_day(
+            connection,
+            &format!("{}{}", name, "_prediction_lstm"),
+            date,
+        ) {
+            Ok(data) => data,
+            Err(err) => match err {
+                rusqlite::Error::QueryReturnedNoRows => {
+                    if data.is_empty() {
+                        return Self::no_data();
+                    }
+                    Vec::new()
+                }
+                _ => return Self::server_error(&err.to_string()),
+            },
+        };
         // Default to the last scraped Schedule if there is no schedule for the day
         let schedule: Schedule =
             match SqliteDatabase::query_single_day_schedule(connection, name, date) {
@@ -123,7 +139,7 @@ impl Server {
                 Err(err) => return Self::server_error(&err.to_string()),
             };
 
-        let result = MyResponse::new(data, schedule, knn_prediction);
+        let result = MyResponse::new(data, schedule, knn_prediction, lstm_prediction);
         Self::ok_data(result)
     }
 
@@ -218,6 +234,7 @@ impl Server {
         let result = MyResponse::new(
             occupancy_data,
             serde_json::from_str(&schedule).unwrap(),
+            Vec::new(),
             Vec::new(),
         );
         Self::ok_data(result)
