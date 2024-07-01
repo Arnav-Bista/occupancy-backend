@@ -1,8 +1,3 @@
-use std::{f64, sync::Arc};
-
-use chrono::NaiveDate;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 
 pub struct KNNRegressor {}
 
