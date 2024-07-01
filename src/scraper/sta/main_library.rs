@@ -5,7 +5,9 @@ use reqwest::{Client, Method, RequestBuilder};
 use serde::Deserialize;
 
 use crate::{
-    predictor::knn_regressor::KNNRegressor, scraper::scraper::Scrape, timing::{daily::Daily, schedule::Schedule, uk_datetime_now::uk_datetime_now}, ISO_FORMAT, ISO_FORMAT_DATE
+    scraper::scraper::Scrape,
+    timing::{daily::Daily, schedule::Schedule, uk_datetime_now::uk_datetime_now},
+    ISO_FORMAT_DATE,
 };
 
 pub struct MainLibrary {
@@ -153,5 +155,4 @@ impl Scrape<MainLibrary> for MainLibrary {
     fn get_last_updated(&self) -> Option<NaiveDate> {
         self.last_scraped
     }
-
 }
