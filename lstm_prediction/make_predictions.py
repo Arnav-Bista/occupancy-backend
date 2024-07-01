@@ -3,7 +3,6 @@ import numpy as np
 from datetime import datetime, timedelta
 import sys
 
-import matplotlib.pyplot as plt
 
 TIME_INTERVAL = timedelta(minutes=5)
 SEQUENCE_LENGTH = 12 * 4
@@ -30,14 +29,13 @@ def main():
 
     opening_datetime = datetime(day.year, day.month, day.day, opening // 100, opening % 100)
     closing_datetime = datetime(day.year, day.month, day.day, closing // 100, closing % 100)
-
-    print(opening_datetime)
-    print(closing_datetime)
-
+    
+    original = []
     timings = []
     seasonal = (day - datetime(day.year, 1, 1)).days / 365
     current_time = opening_datetime
-    while current_time < closing_datetime:
+    while current_time <= closing_datetime:
+        original.append(current_time.isoformat())
         normalised = (current_time.timestamp() - opening_datetime.timestamp()) / (closing_datetime.timestamp() - opening_datetime.timestamp())
         timings.append([normalised, seasonal])
         current_time += TIME_INTERVAL
@@ -50,10 +48,8 @@ def main():
     pred = model.predict(X)
     
     with open("output", "w") as f:
-        for val in pred:
-            f.write(str(val[0]) + '\n')
-
-    print(pred.transpose())
+        for time,val in zip(original, pred):
+            f.write(str(time) + "," + str(val[0] * 100) + '\n')
 
 
 if __name__ == '__main__':
