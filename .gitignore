@@ -1,4 +1,6 @@
 /target
+venv/
+output
 knn_config/
 *.backup
 *.bck
