@@ -4,13 +4,18 @@ from datetime import datetime, timedelta
 import sys
 
 
-TIME_INTERVAL = timedelta(minutes=5)
+TIME_INTERVAL = timedelta(minutes=1)
 SEQUENCE_LENGTH = 12 * 4
 
 
 def create_sequences(features, targets, sequence_length):
     X, y = [], []
-    for i in range(len(features) - sequence_length):
+    n = len(targets)
+    for i in range(len(features)):
+        if i + sequence_length >= n:
+            X.append(features[-sequence_length::])
+            y.append(targets[-1])
+            continue
         X.append(features[i:i + sequence_length])
         y.append(targets[i + sequence_length])
     return np.array(X), np.array(y)
@@ -44,8 +49,10 @@ def main():
 
     X = create_sequences(timings, [0] * len(timings), SEQUENCE_LENGTH)[0]
 
+
     model = tf.keras.models.load_model('model_3lstm.keras')
     pred = model.predict(X)
+
     
     with open("output", "w") as f:
         for time,val in zip(original, pred):
