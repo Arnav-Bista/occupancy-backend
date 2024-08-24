@@ -208,7 +208,7 @@ impl Scraper {
 
         match last_updated {
             Some(last_updated) => {
-                if last_updated <= next_week {
+                if last_updated>= next_week {
                     // Already up to date with the predictions, nothing to do.
                     return;
                 }
