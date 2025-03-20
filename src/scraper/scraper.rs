@@ -1,5 +1,5 @@
 use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveDateTime, TimeDelta, Timelike};
-use chrono_tz::Tz;
+use chrono_tz::{GBEire, Tz};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use reqwest::RequestBuilder;
@@ -10,7 +10,7 @@ use std::{collections::HashMap, f64, fs, path::Path, sync::Arc};
 
 use crate::{
     database::sqlite::SqliteDatabase,
-    predictor::{knn_regressor::KNNRegressor, lstm_regressor::LSTMRegressor},
+    predictor::{gb_regressor::GBRegressor, knn_regressor::KNNRegressor, lstm_regressor::LSTMRegressor},
     scraper::sta::main_library::MainLibrary,
     timing::{schedule::Schedule, uk_datetime_now::uk_datetime_now},
     ISO_FORMAT,
@@ -221,20 +221,21 @@ impl Scraper {
                     schedule,
                 );
                 if T::table_name() == "gym" {
-                    Self::make_lstm_predictions(
-                        target,
-                        connection_pool,
-                        last_updated,
-                        next_week,
-                        schedule,
-                    );
+                    // Self::make_lstm_predictions(
+                    //     target,
+                    //     connection_pool,
+                    //     last_updated,
+                    //     next_week,
+                    //     schedule,
+                    // );
+                    Self::make_gb_prediction(target, connection_pool, last_updated, next_week, schedule);
                 }
             }
             None => {
                 // Assume data is not there.
                 Self::make_knn_predictions(target, connection_pool, today, next_week, schedule);
                 if T::table_name() == "gym" {
-                    Self::make_lstm_predictions(
+                    Self::make_gb_prediction(
                         target,
                         connection_pool,
                         today,
@@ -343,6 +344,60 @@ impl Scraper {
         };
     }
 
+    fn make_gb_prediction<T: Scrape<T>>(
+        target: &mut T,
+        connection_pool: &Arc<Pool<SqliteConnectionManager>>,
+        from: NaiveDate,
+        to: NaiveDate,
+        schedule: &Schedule,
+    ) {
+        let predictions = match GBRegressor::predict_gym(
+            from,
+            to,
+            schedule
+        ) {
+                Ok(predictions) => predictions,
+                Err(err) => {
+                    println!("Could not get GB predictions.\n{}", err);
+                    return;
+                }
+        };
+
+
+        for prediction in predictions {
+            final_predictions.push((prediction.0, prediction.1 as u16));
+        }
+
+            current_date = current_date.checked_add_days(Days::new(1)).unwrap();
+        }
+
+        let connection = match connection_pool.get() {
+            Ok(connection) => connection,
+            Err(err) => {
+                println!("Could not get connection for GB predictions.\n{}", err);
+                return;
+            }
+        };
+
+        match SqliteDatabase::delete_range(
+            &connection,
+            &format!("{}{}", T::table_name(), "_prediction_gb"),
+            from.and_hms_opt(0, 0, 0).unwrap(),
+            to.and_hms_opt(0, 0, 0).unwrap(),
+        ) {
+            Err(err) => println!("Could not delete gb predictions.\n{}", err),
+            _ => (),
+        };
+        match SqliteDatabase::insert_many_occupancy(
+            &connection,
+            &format!("{}{}", T::table_name(), "_prediction_gb"),
+            final_predictions,
+        ) {
+            Err(err) => println!("Could not insert gb predictions.\n{}", err),
+            _ => (),
+        };
+    }
+
     fn make_knn_predictions<T: Scrape<T>>(
         target: &mut T,
         connection_pool: &Arc<Pool<SqliteConnectionManager>>,
@@ -444,8 +499,7 @@ impl Scraper {
     }
 }
 
-pub trait Scrape<T> {
-    fn table_name() -> String;
+pub trait Scrape<T> { fn table_name() -> String;
 
     fn get_request(&self) -> RequestBuilder;
 
