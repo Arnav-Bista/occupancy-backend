@@ -10,7 +10,9 @@ use std::{collections::HashMap, f64, fs, path::Path, sync::Arc};
 
 use crate::{
     database::sqlite::SqliteDatabase,
-    predictor::{gb_regressor::GBRegressor, knn_regressor::KNNRegressor, lstm_regressor::LSTMRegressor},
+    predictor::{
+        gb_regressor::GBRegressor, knn_regressor::KNNRegressor, lstm_regressor::LSTMRegressor,
+    },
     scraper::sta::main_library::MainLibrary,
     timing::{schedule::Schedule, uk_datetime_now::uk_datetime_now},
     ISO_FORMAT,
@@ -67,10 +69,11 @@ impl Scraper {
 
     pub async fn run(self) {
         let gym = Gym::new(self.knn_config.get("gym").cloned());
-        let library = MainLibrary::new(self.knn_config.get("main_library").cloned());
         println!("Running!");
         tokio::spawn(Self::run_scraper(self.connection_pool.clone(), gym));
-        tokio::spawn(Self::run_scraper(self.connection_pool.clone(), library));
+        // Library API are not up
+        // let library = MainLibrary::new(self.knn_config.get("main_library").cloned());
+        // tokio::spawn(Self::run_scraper(self.connection_pool.clone(), library));
     }
 
     async fn run_scraper<T: Scrape<T>>(
@@ -179,6 +182,21 @@ impl Scraper {
             Err(_) => return Err(format!("Could not create table '{}'.", name).to_string()),
             _ => (),
         };
+        let table_name = name.to_string() + "_prediction_gb";
+        match connection.execute(
+            &format!(
+                "CREATE TABLE IF NOT EXISTS {} (
+                    id INTEGER PRIMARY KEY,
+                    time TEXT NOT NULL,
+                    occupancy INTEGER NOT NULL
+                )",
+                table_name
+            ),
+            (),
+        ) {
+            Err(_) => return Err(format!("Could not create table '{}'.", name).to_string()),
+            _ => (),
+        };
         let table_name = name.to_string() + "_prediction_lstm";
         match connection.execute(
             &format!(
@@ -208,7 +226,7 @@ impl Scraper {
 
         match last_updated {
             Some(last_updated) => {
-                if last_updated>= next_week {
+                if last_updated >= next_week {
                     // Already up to date with the predictions, nothing to do.
                     return;
                 }
@@ -221,27 +239,20 @@ impl Scraper {
                     schedule,
                 );
                 if T::table_name() == "gym" {
-                    // Self::make_lstm_predictions(
-                    //     target,
-                    //     connection_pool,
-                    //     last_updated,
-                    //     next_week,
-                    //     schedule,
-                    // );
-                    Self::make_gb_prediction(target, connection_pool, last_updated, next_week, schedule);
+                    Self::make_gb_prediction(
+                        target,
+                        connection_pool,
+                        last_updated,
+                        next_week,
+                        schedule,
+                    );
                 }
             }
             None => {
                 // Assume data is not there.
                 Self::make_knn_predictions(target, connection_pool, today, next_week, schedule);
                 if T::table_name() == "gym" {
-                    Self::make_gb_prediction(
-                        target,
-                        connection_pool,
-                        today,
-                        next_week,
-                        schedule,
-                    );
+                    Self::make_gb_prediction(target, connection_pool, today, next_week, schedule);
                 }
             }
         }
@@ -281,68 +292,69 @@ impl Scraper {
         Ok(grouped_data)
     }
 
-    fn make_lstm_predictions<T: Scrape<T>>(
-        target: &mut T,
-        connection_pool: &Arc<Pool<SqliteConnectionManager>>,
-        from: NaiveDate,
-        to: NaiveDate,
-        schedule: &Schedule,
-    ) {
-        let timings = schedule.get_timings();
-        let mut current_date = from;
-        let mut final_predictions = Vec::new();
-        while current_date <= to {
-            let index = (current_date.weekday().number_from_monday() - 1) as usize;
-
-            // Default if closed
-            let opening_hm = timings[index].opening().unwrap_or(630) as u32;
-            let closing_hm = timings[index].closing().unwrap_or(2230) as u32;
-
-            let predictions = match LSTMRegressor::predict_gym(
-                current_date,
-                opening_hm as u16,
-                closing_hm as u16,
-            ) {
-                Ok(predictions) => predictions,
-                Err(err) => {
-                    println!("Could not get LSTM predictions.\n{}", err);
-                    return;
-                }
-            };
-
-            for prediction in predictions {
-                final_predictions.push((prediction.0, prediction.1 as u16));
-            }
-
-            current_date = current_date.checked_add_days(Days::new(1)).unwrap();
-        }
-
-        let connection = match connection_pool.get() {
-            Ok(connection) => connection,
-            Err(err) => {
-                println!("Could not get connection for LSTM predictions.\n{}", err);
-                return;
-            }
-        };
-
-        match SqliteDatabase::delete_range(
-            &connection,
-            &format!("{}{}", T::table_name(), "_prediction_lstm"),
-            from.and_hms_opt(0, 0, 0).unwrap(),
-            to.and_hms_opt(0, 0, 0).unwrap(),
-        ) {
-            Err(err) => println!("Could not delete lstm predictions.\n{}", err),
-            _ => (),
-        };
-        match SqliteDatabase::insert_many_occupancy(
-            &connection,
-            &format!("{}{}", T::table_name(), "_prediction_lstm"),
-            final_predictions,
-        ) {
-            Err(err) => println!("Could not insert lstm predictions.\n{}", err),
-            _ => (),
-        };
-    }
+    /// To be depricated
+    // fn make_lstm_predictions<T: Scrape<T>>(
+    //     target: &mut T,
+    //     connection_pool: &Arc<Pool<SqliteConnectionManager>>,
+    //     from: NaiveDate,
+    //     to: NaiveDate,
+    //     schedule: &Schedule,
+    // ) {
+    //     let timings = schedule.get_timings();
+    //     let mut current_date = from;
+    //     let mut final_predictions = Vec::new();
+    //     while current_date <= to {
+    //         let index = (current_date.weekday().number_from_monday() - 1) as usize;
+    //
+    //         // Default if closed
+    //         let opening_hm = timings[index].opening().unwrap_or(630) as u32;
+    //         let closing_hm = timings[index].closing().unwrap_or(2230) as u32;
+    //
+    //         let predictions = match LSTMRegressor::predict_gym(
+    //             current_date,
+    //             opening_hm as u16,
+    //             closing_hm as u16,
+    //         ) {
+    //             Ok(predictions) => predictions,
+    //             Err(err) => {
+    //                 println!("Could not get LSTM predictions.\n{}", err);
+    //                 return;
+    //             }
+    //         };
+    //
+    //         for prediction in predictions {
+    //             final_predictions.push((prediction.0, prediction.1 as u16));
+    //         }
+    //
+    //         current_date = current_date.checked_add_days(Days::new(1)).unwrap();
+    //     }
+    //
+    //     let connection = match connection_pool.get() {
+    //         Ok(connection) => connection,
+    //         Err(err) => {
+    //             println!("Could not get connection for LSTM predictions.\n{}", err);
+    //             return;
+    //         }
+    //     };
+    //
+    //     match SqliteDatabase::delete_range(
+    //         &connection,
+    //         &format!("{}{}", T::table_name(), "_prediction_lstm"),
+    //         from.and_hms_opt(0, 0, 0).unwrap(),
+    //         to.and_hms_opt(0, 0, 0).unwrap(),
+    //     ) {
+    //         Err(err) => println!("Could not delete lstm predictions.\n{}", err),
+    //         _ => (),
+    //     };
+    //     match SqliteDatabase::insert_many_occupancy(
+    //         &connection,
+    //         &format!("{}{}", T::table_name(), "_prediction_lstm"),
+    //         final_predictions,
+    //     ) {
+    //         Err(err) => println!("Could not insert lstm predictions.\n{}", err),
+    //         _ => (),
+    //     };
+    // }
 
     fn make_gb_prediction<T: Scrape<T>>(
         target: &mut T,
@@ -351,26 +363,19 @@ impl Scraper {
         to: NaiveDate,
         schedule: &Schedule,
     ) {
-        let predictions = match GBRegressor::predict_gym(
-            from,
-            to,
-            schedule
-        ) {
-                Ok(predictions) => predictions,
-                Err(err) => {
-                    println!("Could not get GB predictions.\n{}", err);
-                    return;
-                }
+        let predictions: Vec<(NaiveDateTime, f64)> = match GBRegressor::predict_gym(from, to, schedule) {
+            Ok(predictions) => predictions,
+            Err(err) => {
+                println!("Could not get GB predictions.\n{}", err);
+                return;
+            }
         };
 
-
+        let mut final_predictions = Vec::new();
         for prediction in predictions {
             final_predictions.push((prediction.0, prediction.1 as u16));
         }
-
-            current_date = current_date.checked_add_days(Days::new(1)).unwrap();
-        }
-
+        
         let connection = match connection_pool.get() {
             Ok(connection) => connection,
             Err(err) => {
@@ -499,7 +504,8 @@ impl Scraper {
     }
 }
 
-pub trait Scrape<T> { fn table_name() -> String;
+pub trait Scrape<T> {
+    fn table_name() -> String;
 
     fn get_request(&self) -> RequestBuilder;
 

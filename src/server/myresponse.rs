@@ -10,7 +10,7 @@ use crate::timing::schedule::Schedule;
 pub struct MyResponse {
     data: Vec<(String, u16)>,
     prediction_knn: Vec<(String, u16)>,
-    prediction_lstm: Vec<(String, u16)>,
+    prediction_gb: Vec<(String, u16)>,
     schedule: Schedule,
 }
 
@@ -19,13 +19,13 @@ impl MyResponse {
         data: Vec<(String, u16)>,
         schedule: Schedule,
         prediction_knn: Vec<(String, u16)>,
-        prediction_lstm: Vec<(String, u16)>,
+        prediction_gb: Vec<(String, u16)>,
     ) -> Self {
         Self {
             data,
             schedule,
             prediction_knn,
-            prediction_lstm,
+            prediction_gb,
         }
     }
 }

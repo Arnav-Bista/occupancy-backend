@@ -107,9 +107,9 @@ impl Server {
                 _ => return Self::server_error(&err.to_string()),
             },
         };
-        let lstm_prediction: Vec<(String, u16)> = match SqliteDatabase::query_single_day(
+        let gb_prediction: Vec<(String, u16)> = match SqliteDatabase::query_single_day(
             connection,
-            &format!("{}{}", name, "_prediction_lstm"),
+            &format!("{}{}", name, "_prediction_gb"),
             date,
         ) {
             Ok(data) => data,
@@ -139,7 +139,7 @@ impl Server {
                 Err(err) => return Self::server_error(&err.to_string()),
             };
 
-        let result = MyResponse::new(data, schedule, knn_prediction, lstm_prediction);
+        let result = MyResponse::new(data, schedule, knn_prediction, gb_prediction);
         Self::ok_data(result)
     }
 

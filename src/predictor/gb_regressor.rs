@@ -35,7 +35,7 @@ impl GBRegressor {
         match command.wait_with_output() {
             Ok(output) => {
                 if !output.status.success() {
-                    return Err("Failed to execute the command".to_string());
+                    return Err(format!("Failed to execute the command. {}", output.status));
                 }
             }
             Err(e) => return Err(format!("Failed to wait. {}", e.to_string())),

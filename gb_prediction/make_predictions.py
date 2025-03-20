@@ -5,6 +5,43 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 
+# Used Claude to convert my notebook into this script
+
+def classify_term_time(df, timestamp_col='timestamp'):
+    result_df = df.copy()
+
+    # Define term time periods for both academic years
+    term_periods = [
+        # ====== 2024-2025 Academic Year ======
+        # Semester 1 teaching (excluding ILW)
+        (pd.Timestamp('2024-09-16'), pd.Timestamp('2024-10-20')),  # Week 1-5
+        (pd.Timestamp('2024-10-28'), pd.Timestamp('2024-12-01')),  # Week 7-11
+        
+        # Semester 1 exams
+        (pd.Timestamp('2024-12-06'), pd.Timestamp('2024-12-20')),
+        
+        # Semester 2 teaching (excluding Spring vacation and ILW)
+        (pd.Timestamp('2025-01-27'), pd.Timestamp('2025-03-02')),  # Week 1-5
+        (pd.Timestamp('2025-03-10'), pd.Timestamp('2025-04-06')),  # Week 6-9
+        (pd.Timestamp('2025-04-14'), pd.Timestamp('2025-04-27')),  # Week 11-12
+        
+        # Semester 2 revision and exams
+        (pd.Timestamp('2025-04-28'), pd.Timestamp('2025-05-26')),  # Revision and regular exams
+        (pd.Timestamp('2025-05-27'), pd.Timestamp('2025-05-31'))   # Extended exams (partial week)
+    ]
+    
+    # Initialize the column with all 1's (assuming non-term time by default)
+    result_df['is_non_term_time'] = 1
+    
+    # Set to 0 for dates that fall within term periods
+    for start_date, end_date in term_periods:
+        # Add one day to end_date to make the comparison inclusive
+        end_date_inclusive = end_date + pd.Timedelta(days=1)
+        mask = (result_df[timestamp_col] >= start_date) & (result_df[timestamp_col] < end_date_inclusive)
+        result_df.loc[mask, 'is_non_term_time'] = 0
+    
+    return result_df
+
 # Classes from notebook
 class Timing:
     def __init__(self, opening, closing, isOpen):
@@ -13,7 +50,7 @@ class Timing:
         self.isOpen = isOpen
 
 class Schedule:
-    def __init__(self, sch):
+    def __init__(self, sch_json):
         self.default = [
             Timing(630, 2230, True),
             Timing(630, 2230, True),
@@ -24,14 +61,11 @@ class Schedule:
             Timing(800, 2100, True),
         ]
         self.data = {}
-        for i in range(len(sch)):
-            date = sch[0][i]
-            timings = []
-            jsondata = json.loads(sch[1][i])['timings']
-            for j in range(7):
-                jsontime = jsondata[j]
-                timings.append(Timing(jsontime['opening'], jsontime['closing'], jsontime['open']))
-            self.data[date] = timings
+        jsondata = json.loads(sch_json)['timings']
+        timings = []
+        for jsontime in jsondata:
+            timings.append(Timing(jsontime['opening'], jsontime['closing'], jsontime['open']))
+        self.data = timings
             
     def timestamp_to_hhmm(self, timestamp):
         return timestamp.hour * 100 + timestamp.minute
@@ -46,15 +80,11 @@ class Schedule:
     
     def get_number(self, timestamp):
         number = self.timestamp_to_hhmm(timestamp)
-        start = self.get_start_of_week(timestamp)
+
         index = self.get_weekday(timestamp)
         
-        if start in self.data:
-            opening = self.data[start][index].opening
-            closing = self.data[start][index].closing
-        else:
-            opening = self.default[index].opening
-            closing = self.default[index].closing
+        opening = self.data[index].opening
+        closing = self.data[index].closing
             
         if number <= opening:
             return 0
@@ -98,7 +128,7 @@ def generate_datetime_range(date_from, date_to, interval_minutes=5):
 def main():
     # Get input parameters from command line
     if len(sys.argv) != 4:
-        print("Usage: python script.py 'YYYY-MM-DD HH:MM' 'YYYY-MM-DD HH:MM' 'schedule_json_string'")
+        print("Usage: python script.py 'YYYY-MM-DD' 'YYYY-MM-DD' 'schedule_json_string'")
         sys.exit(1)
     
     date_from_str = sys.argv[1]
@@ -106,12 +136,11 @@ def main():
     schedule_json_str = sys.argv[3]
     
     # Parse dates
-    date_from = datetime.strptime(date_from_str, '%Y-%m-%d %H:%M')
-    date_to = datetime.strptime(date_to_str, '%Y-%m-%d %H:%M')
+    date_from = datetime.strptime(date_from_str, '%Y-%m-%d')
+    date_to = datetime.strptime(date_to_str, '%Y-%m-%d')
     
     # Parse schedule
-    schedule_data = json.loads(schedule_json_str)
-    schedule = Schedule(schedule_data)
+    schedule = Schedule(schedule_json_str)
     
     # Load model
     model = pickle.load(open('gb_model.pkl', 'rb'))
@@ -128,6 +157,9 @@ def main():
     # Add schedule feature
     df['schedule'] = df['timestamp'].apply(lambda x: schedule.get_number(x))
     
+    # Add term time classification
+    df = classify_term_time(df)
+    
     # Prepare input for prediction
     X_pred = df.drop('timestamp', axis=1)
     
@@ -140,7 +172,7 @@ def main():
     # Format output
     output_df = pd.DataFrame({
         'datetime': df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S'),
-        'occupancy': predictions
+        'occupancy': predictions * 100  
     })
     
     # Write to output.csv
