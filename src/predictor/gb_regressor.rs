@@ -40,7 +40,7 @@ impl GBRegressor {
             }
             Err(e) => return Err(format!("Failed to wait. {}", e.to_string())),
         }
-        let output = match fs::read_to_string("gb_prediction/output") {
+        let output = match fs::read_to_string("gb_prediction/output.csv") {
             Ok(output) => output,
             Err(e) => return Err(format!("Failed to read output. {}", e.to_string())),
         };
