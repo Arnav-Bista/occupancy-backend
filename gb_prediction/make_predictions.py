@@ -171,7 +171,7 @@ def main():
     
     # Format output
     output_df = pd.DataFrame({
-        'datetime': df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S'),
+        'datetime': df['timestamp'].dt.strftime('%Y-%m-%dT%H:%M:%S'),
         'occupancy': predictions * 100  
     })
     
