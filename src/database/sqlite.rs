@@ -216,5 +216,20 @@ impl SqliteDatabase {
         }
         Ok(())
     }
-
+    
+    pub fn insert_one_schedule(
+        connection: &PooledConnection<SqliteConnectionManager>,
+        table_name: &str,
+        date: NaiveDate,
+        schedule: &Schedule
+    ) -> rusqlite::Result<()> {
+        connection.execute(
+            &format!(
+                "INSERT OR REPLACE INTO {}_schedule (date, schedule) VALUES (?1, ?2)",
+                table_name
+            ),
+            rusqlite::params![date.to_string(), serde_json::to_string(schedule).unwrap()],
+        )?;
+        Ok(())
+    }
 }

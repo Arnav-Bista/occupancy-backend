@@ -5,14 +5,11 @@ use r2d2_sqlite::SqliteConnectionManager;
 use reqwest::RequestBuilder;
 use tokio::time::{sleep_until, Duration, Instant};
 
-use core::panic;
 use std::{collections::HashMap, f64, fs, path::Path, sync::Arc};
 
 use crate::{
     database::sqlite::SqliteDatabase,
-    predictor::{
-        gb_regressor::GBRegressor, knn_regressor::KNNRegressor, lstm_regressor::LSTMRegressor,
-    },
+    predictor::{gb_regressor::GBRegressor, knn_regressor::KNNRegressor},
     scraper::sta::main_library::MainLibrary,
     timing::{schedule::Schedule, uk_datetime_now::uk_datetime_now},
     ISO_FORMAT,
@@ -112,6 +109,16 @@ impl Scraper {
                     &T::table_name(),
                     timestamp.naive_local(),
                     occupancy,
+                ) {
+                    Err(err) => println!("Error writing to database.\n{}", err.to_string()),
+                    _ => (),
+                };
+
+                match SqliteDatabase::insert_one_schedule(
+                    &connection,
+                    &T::table_name(),
+                    timestamp.naive_local().date(),
+                    &schedule,
                 ) {
                     Err(err) => println!("Error writing to database.\n{}", err.to_string()),
                     _ => (),
@@ -363,19 +370,20 @@ impl Scraper {
         to: NaiveDate,
         schedule: &Schedule,
     ) {
-        let predictions: Vec<(NaiveDateTime, f64)> = match GBRegressor::predict_gym(from, to, schedule) {
-            Ok(predictions) => predictions,
-            Err(err) => {
-                println!("Could not get GB predictions.\n{}", err);
-                return;
-            }
-        };
+        let predictions: Vec<(NaiveDateTime, f64)> =
+            match GBRegressor::predict_gym(from, to, schedule) {
+                Ok(predictions) => predictions,
+                Err(err) => {
+                    println!("Could not get GB predictions.\n{}", err);
+                    return;
+                }
+            };
 
         let mut final_predictions = Vec::new();
         for prediction in predictions {
             final_predictions.push((prediction.0, prediction.1 as u16));
         }
-        
+
         let connection = match connection_pool.get() {
             Ok(connection) => connection,
             Err(err) => {
