@@ -153,6 +153,46 @@ impl SqliteDatabase {
     }
 
     /**
+    Get the time and occupancy% for a range.
+
+    Given a start and end date, return the occupancy data for that range.
+
+    This is year agnostic!
+    */
+    pub fn query_range_agnostic(
+        connection: &PooledConnection<SqliteConnectionManager>,
+        table_name: &str,
+        from: NaiveDateTime,
+        to: NaiveDateTime
+    ) -> rusqlite::Result<Vec<(String, u16)>> {
+        let mut statement = connection.prepare(&format!(
+            "SELECT time,occupancy FROM {} WHERE (
+                CASE 
+                    WHEN strftime('%m-%d', ?1) <= strftime('%m-%d', ?2)
+                    THEN strftime('%m-%d', time) BETWEEN strftime('%m-%d', ?1) AND strftime('%m-%d', ?2)
+
+                    ELSE strftime('%m-%d', time) >= strftime('%m-%d', ?1) 
+                        OR strftime('%m-%d', time) <= strftime('%m-%d', ?2)  
+                END
+            )",
+            table_name
+        ))?;
+
+        let rows = statement.query_map(rusqlite::params![from.to_string(), to.to_string()], |row| {
+            let time: String = row.get(0)?;
+            let occupancy: u16 = row.get(1)?;
+            Ok((time, occupancy))
+        })?;
+        
+        let mut data: Vec<(String, u16)> = Vec::new();
+        for row in rows {
+            data.push(row?);
+        }
+        Ok(data)
+
+    }
+
+    /**
     Deletes all records specified by the range.
 
     Uses the sqlite strftime function to compare the dates with the BETWEEN operator.

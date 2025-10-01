@@ -87,14 +87,6 @@ impl Scraper {
                 Ok(data) => data,
             };
 
-            if occupancy.is_none() || schedule.is_none() {
-                Self::standard_sleep().await;
-                continue;
-            }
-
-            let occupancy = occupancy.unwrap();
-            let schedule = schedule.unwrap();
-
             let connection = match connection_pool.get() {
                 Ok(conn) => conn,
                 Err(_) => {
@@ -103,26 +95,36 @@ impl Scraper {
                 }
             };
 
-            if schedule.is_open(timestamp) {
-                match SqliteDatabase::insert_one_occupancy(
-                    &connection,
-                    &T::table_name(),
-                    timestamp.naive_local(),
-                    occupancy,
-                ) {
-                    Err(err) => println!("Error writing to database.\n{}", err.to_string()),
-                    _ => (),
-                };
+            // Cannot do anything without a schedule
+            // But we can make predictions without occupancy readings
+            if schedule.is_none() {
+                Self::standard_sleep().await;
+            }
 
-                match SqliteDatabase::insert_one_schedule(
-                    &connection,
-                    &T::table_name(),
-                    timestamp.naive_local().date(),
-                    &schedule,
-                ) {
-                    Err(err) => println!("Error writing to database.\n{}", err.to_string()),
-                    _ => (),
-                };
+            let schedule = schedule.unwrap();
+
+            if let Some(occupancy) = occupancy {
+                if schedule.is_open(timestamp) {
+                    match SqliteDatabase::insert_one_occupancy(
+                        &connection,
+                        &T::table_name(),
+                        timestamp.naive_local(),
+                        occupancy,
+                    ) {
+                        Err(err) => println!("Error writing to database.\n{}", err.to_string()),
+                        _ => (),
+                    };
+
+                    match SqliteDatabase::insert_one_schedule(
+                        &connection,
+                        &T::table_name(),
+                        timestamp.naive_local().date(),
+                        &schedule,
+                    ) {
+                        Err(err) => println!("Error writing to database.\n{}", err.to_string()),
+                        _ => (),
+                    };
+                }
             }
 
             Self::check_and_predict(&mut target, &connection_pool, &schedule);
@@ -278,7 +280,8 @@ impl Scraper {
             Err(_) => return Err("Could not get connection.".to_string()),
         };
         let table_name = &T::table_name();
-        let data = match SqliteDatabase::query_range(&connection, &table_name, from, to) {
+        // let data = match SqliteDatabase::query_range(&connection, &table_name, from, to) {
+        let data = match SqliteDatabase::query_range_agnostic(&connection, &table_name, from, to) {
             Ok(data) => data,
             Err(err) => return Err(err.to_string()),
         };
@@ -418,6 +421,7 @@ impl Scraper {
         to: NaiveDate,
         schedule: &Schedule,
     ) {
+        println!("Making KNN Predictions!");
         let data = match Self::get_last_n_weeks_data_grouped(target, connection_pool, 3) {
             Ok(data) => data,
             Err(err) => {
