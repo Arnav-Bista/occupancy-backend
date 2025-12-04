@@ -1,4 +1,7 @@
+use std::fmt::Display;
+
 use chrono::{NaiveDate, NaiveDateTime};
+use headless_chrome::Browser;
 use regex::Regex;
 use reqwest::Client;
 use reqwest::{Method, RequestBuilder};
@@ -109,17 +112,24 @@ impl Scrape<Gym> for Gym {
         Some(schedule)
     }
 
-    fn get_request(&self) -> RequestBuilder {
-        self.client
-            .request(Method::GET, &self.url)
-            .header("User-Agent", &self.user_agent)
-    }
-
     fn set_last_updated(&mut self, last_updated: NaiveDate) {
         self.last_scraped = Some(last_updated);
     }
 
     fn get_last_updated(&self) -> Option<NaiveDate> {
         self.last_scraped
+    }
+
+    fn fetch_data(&self) -> Result<String, String> {
+        let browser = Browser::default().map_err(|_| "Could not create a browser")?;
+
+        let tab = browser.new_tab().map_err(|_| "Could not create a tab")?;
+        tab.navigate_to(&self.url)
+            .map_err(|_| "Coult not navigate")?;
+        tab.wait_until_navigated().map_err(|_| "Could not wait")?;
+        match tab.get_content().map_err(|_| "Could not get content") {
+            Ok(html) => Ok(html),
+            Err(err) => Err(err.into()),
+        }
     }
 }

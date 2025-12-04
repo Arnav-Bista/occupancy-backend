@@ -78,7 +78,14 @@ impl Scraper {
         mut target: T,
     ) {
         loop {
-            let (occupancy, schedule, timestamp) = match target.scrape(target.get_request()).await {
+            let fetched_data = match target.fetch_data() {
+                Ok(data) => data,
+                Err(err) => {
+                    println!("Failed to fetch data.\n{}", err);
+                    continue;
+                }
+            };
+            let (occupancy, schedule, timestamp) = match target.scrape(&fetched_data).await {
                 Err(err) => {
                     println!("{}", err);
                     Self::standard_sleep().await;
@@ -104,6 +111,7 @@ impl Scraper {
             let schedule = schedule.unwrap();
 
             if let Some(occupancy) = occupancy {
+                println!("Got stuff! {}", occupancy);
                 if schedule.is_open(timestamp) {
                     match SqliteDatabase::insert_one_occupancy(
                         &connection,
@@ -519,25 +527,16 @@ impl Scraper {
 pub trait Scrape<T> {
     fn table_name() -> String;
 
-    fn get_request(&self) -> RequestBuilder;
+    fn fetch_data(&self) -> Result<String, String>;
 
     async fn scrape(
         &self,
-        request: RequestBuilder,
+        data: &str,
     ) -> Result<(Option<u16>, Option<Schedule>, DateTime<Tz>), String> {
-        let response = match request.send().await {
-            Ok(data) => data,
-            Err(err) => return Err(err.to_string()),
-        };
-
-        let body = match response.text().await {
-            Ok(text) => text,
-            Err(err) => return Err(err.to_string()),
-        };
         let timestamp = uk_datetime_now();
         Ok((
-            Self::parse_occupancy(&self, &body),
-            Self::parse_schedule(&self, &body),
+            Self::parse_occupancy(&self, &data),
+            Self::parse_schedule(&self, &data),
             timestamp,
         ))
     }

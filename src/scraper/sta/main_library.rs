@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
 use chrono_tz::Tz;
+use headless_chrome::Browser;
 use regex::Regex;
 use reqwest::{Client, Method, RequestBuilder};
 use serde::Deserialize;
@@ -66,25 +67,23 @@ impl Scrape<MainLibrary> for MainLibrary {
         "main_library".to_string()
     }
 
-    fn get_request(&self) -> RequestBuilder {
-        self.client
-            .request(Method::GET, &self.url)
-            .header("User-Agent", &self.user_agent)
+    fn fetch_data(&self) -> Result<String, String> {
+        let browser = Browser::default().map_err(|_| "Could not create a browser")?;
+
+        let tab = browser.new_tab().map_err(|_| "Could not create a tab")?;
+        tab.navigate_to(&self.url)
+            .map_err(|_| "Coult not navigate")?;
+        tab.wait_until_navigated().map_err(|_| "Could not wait")?;
+        match tab.get_content().map_err(|_| "Could not get content") {
+            Ok(html) => Ok(html),
+            Err(err) => Err(err.into()),
+        }
     }
 
     async fn scrape(
         &self,
-        request: RequestBuilder,
+        data: &str
     ) -> Result<(Option<u16>, Option<Schedule>, DateTime<Tz>), String> {
-        let response = match request.send().await {
-            Ok(data) => data,
-            Err(err) => return Err(err.to_string()),
-        };
-
-        let body = match response.text().await {
-            Ok(text) => text,
-            Err(err) => return Err(err.to_string()),
-        };
         let timestamp = uk_datetime_now();
 
         let schedule_response = match self
@@ -103,7 +102,7 @@ impl Scrape<MainLibrary> for MainLibrary {
         };
 
         Ok((
-            Self::parse_occupancy(&self, &body),
+            Self::parse_occupancy(&self, &data),
             Self::parse_schedule(&self, &schedule_body),
             timestamp,
         ))
